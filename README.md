@@ -42,6 +42,12 @@ pip install qgui
 
 直接运行 `AI_writing_helper.py` 即可。
 
+```
+python AI_writing_helper.py
+```
+
+
+
 ## 打包软件
 
 ### 编程环境
