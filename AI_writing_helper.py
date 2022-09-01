@@ -1,4 +1,4 @@
-import requests
+# -*- encoding:utf-8 -*- 
 import json
 import webbrowser
 import os
@@ -8,20 +8,21 @@ from qgui import CreateQGUI,MessageBox
 from qgui.notebook_tools import InputBox, BaseButton, HorizontalToolsCombine,CheckButton,BaseButton,RadioButton
 from qgui.manager import QStyle
 
+import wenxin_api
+from wenxin_api.tasks.free_qa import FreeQA
+from wenxin_api.tasks.text_generation import TextGeneration
+from wenxin_api.tasks.composition import Composition
+from wenxin_api.tasks.summarization import Summarization
+from wenxin_api.tasks.couplet import Couplet
+
 # 创建主界面
 q_gui = CreateQGUI(title="AI写作外挂",
                    tab_names=["Key","续写","病句","作文","摘要","古诗","对联","改写","词语","押韵","组词"],
                    style=QStyle.lumen)
 
 q_gui.set_navigation_about(author="郭睆（huàn）",
-                           version="1.2.0",
+                           version="1.3.0",
                            github_url="https://github.com/guohuan78",
-                           # 根据我自己的需求添加了以下两个链接，这两个链接的实现更改了 qgui 的内容
-                           # 利用转到定义的功能可以找到，更改了下面两个文件
-                           # 更改 qgui/factory.py 107 行 和 121 行
-                           # 更改 qgui/base_frame.py 61 行 和 86 行
-                           # 上面有更改的文件我放在源码的对应路径了，可以直接替换
-                           # 如若不想更改 qgui，也可直接把下面两行注释掉，不影响程序功能，注意删除此文件 18 行末的逗号
                            bilibili_url="https://space.bilibili.com/518491096?spm_id_from=333.1007.0.0",
                            blog_url="https://guohuan78.github.io/"
                         )
@@ -36,158 +37,181 @@ q_gui.set_navigation_info(title="注意事项", info='''
 5.此软件免费，欢迎赞赏
 ''')
 
-# 复用函数
-def getToken(args: dict):
-    # 获取Token
-    token = requests.request("POST",
-                            "https://wenxin.baidu.com/younger/portal/api/oauth/token",
-                            data={"grant_type": "client_credentials",
-                                "client_id": args["API Key"].get(),  # 填写你的API Key
-                                "client_secret": args["Secret Key"].get()},  # 填写你的Secret Key
-                            timeout=3)
-    return json.loads(token.text)["data"]
-
-def getPost(payload: dict):
-    print("开始请求")
-    response = requests.request("POST",
-                                "https://wenxin.baidu.com/younger/portal/api/rest/1.0/ernie/3.0/zeus",
-                                data=payload)
-
-    print(json.loads(response.text)["data"]["result"])
-    return json.loads(response.text)["data"]["result"]
-
 # 运行按钮对应函数
 def click_run_custom(args: dict):
+    wenxin_api.ak = args["API Key"].get()
+    wenxin_api.sk = args["Secret Key"].get()
     payload={
-    'text': args["续写输入框"].get(),
-    'seq_len': args["续写输入框最多字数"].get(),
-    'task_prompt': '',
-    'dataset_prompt': '',
-    'access_token': getToken(args),
-    'topk': 10,
-    'stop_token': '',
-    'is_unidirectional': 1,
-    'min_dec_len':args["续写输入框最少字数"].get()
+    "text": args["续写输入框"].get(),
+    "seq_len": args["续写输入框最多字数"].get(),
+    "topp": 0.8,
+    "penalty_score": 1.2,
+    "min_dec_len": args["续写输入框最少字数"].get(),
+    "min_dec_penalty_text": "",
+    "is_unidirectional": 1,
+    "task_prompt": "SENT",
+    "mask_type": "sentence"
     }
-    getPost(payload)
+    rst = TextGeneration.create(**payload)
+    print(rst["result"])
 
 def click_run_correction(args: dict):
+    wenxin_api.ak = args["API Key"].get()
+    wenxin_api.sk = args["Secret Key"].get()
     payload={
-    'text': '改正下面文本中的错误：\"' + args["病句输入框"].get() + '\"',
-    'seq_len': 64,
-    'task_prompt': 'Correction',
-    'dataset_prompt': '',
-    'access_token': getToken(args),
-    'topk': 1,
-    'stop_token': '',
+    "text": '改正下面文本中的错误：\"' + args["病句输入框"].get() + '\"',
+    "seq_len": 64,
+    "topp": 0.0,
+    "penalty_score": 1.2,
+    "min_dec_len": 1,
+    "min_dec_penalty_text": "",
+    "is_unidirectional": 0,
+    "task_prompt": "Correction",
+    "mask_type": "sentence"
     }
-    getPost(payload)
+    rst = FreeQA.create(**payload)
+    print(rst["result"])
 
 def click_run_zuowen(args: dict):
+    wenxin_api.ak = args["API Key"].get()
+    wenxin_api.sk = args["Secret Key"].get()
     payload={
-    'text': '作文题目：' + args["作文输入框"].get() + '\n体裁：' + args["RadioButton"].get() + '\n内容：',
-    'seq_len': args["作文输入框最多字数"].get(),
-    'task_prompt': '',
-    'dataset_prompt': 'zuowen',
-    'temperature': '1.0',
-    'penalty_score': '1.2',
-    'is_unidirectional': 0,
-    'min_dec_len': args["作文输入框最少字数"].get(),
-    'min_dec_penalty_text': '[gEND]',
-    'access_token': getToken(args),
-    'topk': 1,
+    "text": '作文题目：' + args["作文输入框"].get() + '\n体裁：' + args["RadioButton"].get() + '\n内容：',
+    "seq_len": args["作文输入框最多字数"].get(),
+    "topp": 0.8,
+    "penalty_score": 1.2,
+    "min_dec_len": args["作文输入框最少字数"].get(),
+    "min_dec_penalty_text": "[gEND]",
+    "is_unidirectional": 0,
+    "task_prompt": "zuowen",
+    "mask_type": "paragraph"
     }
-    getPost(payload)
+    rst = Composition.create(**payload)
+    print(rst["result"])
 
 def click_run_summarization(args: dict):
+    wenxin_api.ak = args["API Key"].get()
+    wenxin_api.sk = args["Secret Key"].get()
     payload={
-    'text': '请给下面这段话写一句摘要：“' + args["摘要输入框"].get() + '”',
-    'seq_len': 32,
-    'task_prompt': 'Summarization',
-    'dataset_prompt': '',
-    'topk': 1,
-    'access_token': getToken(args)
+    "text": '请给下面这段话写一句摘要：“' + args["摘要输入框"].get() + '”',
+    "seq_len": 512,
+    "topp": 0.0,
+    "penalty_score": 1.0,
+    "min_dec_len": 4,
+    "min_dec_penalty_text": "",
+    "is_unidirectional": 0,
+    "task_prompt": "Text2Annotation",
+    "mask_type": "sentence"
     }
-    getPost(payload)
+    rst = Summarization.create(**payload)
+    print(rst["result"])
+
 
 def click_run_poetry(args: dict):
+    wenxin_api.ak = args["API Key"].get()
+    wenxin_api.sk = args["Secret Key"].get()
     payload={
-    'text': '古诗续写：' + args["古诗输入框"].get(),
-    'seq_len': args["古诗输入框最多字数"].get(),
-    'min_dec_len': args["古诗输入框最少字数"].get(),
-    'task_prompt': '',
-    'dataset_prompt': 'poetry',
-    'topk': 10,
-    'stop_token': '',
-    'is_unidirectional': 1,
-    'access_token': getToken(args)
+    "text": '古诗续写：' + args["古诗输入框"].get(),
+    "seq_len": args["古诗输入框最多字数"].get(),
+    "topp": 0.8,
+    "penalty_score": 1.0,
+    "min_dec_len": args["古诗输入框最少字数"].get(),
+    "min_dec_penalty_text": "",
+    "is_unidirectional": 1,
+    "task_prompt": "SENT",
+    "mask_type": "sentence"
     }
-    getPost(payload)
+    rst = TextGeneration.create(**payload)
+    print(rst["result"])
 
 def click_run_couplet(args: dict):
+    wenxin_api.ak = args["API Key"].get()
+    wenxin_api.sk = args["Secret Key"].get()
     payload={
-    'text': '上联:' + args["对联输入框"].get() + ' 下联:',
-    'seq_len': 32,
-    'task_prompt': '',
-    'dataset_prompt': 'couplet',
-    'topk': 10,
-    'stop_token': '',
-    'access_token': getToken(args)
+    "text": '上联:' + args["对联输入框"].get() + ' 下联:',
+    "seq_len": 32,
+    "topp": 0.8,
+    "penalty_score": 1.0,
+    "min_dec_len": 1,
+    "min_dec_penalty_text": "",
+    "is_unidirectional": 1,
+    "task_prompt": "couplet",
+    "mask_type": "sentence"
     }
-    getPost(payload)
+    rst = Couplet.create(**payload)
+    print(rst["result"])
 
 def click_run_rewrite(args: dict):
+    wenxin_api.ak = args["API Key"].get()
+    wenxin_api.sk = args["Secret Key"].get()
     payload={
-    'text': '“' + args["改写输入框"].get() + '”换种表达，意思不变：',
-    'seq_len': 64,
-    'task_prompt': 'Paraphrasing',
-    'dataset_prompt': '',
-    'topk': 1,
-    'stop_token': '',
-    'access_token': getToken(args)
+    "text": '“' + args["改写输入框"].get() + '”换种表达，意思不变：',
+    "seq_len": 64,
+    "topp": 0.0,
+    "penalty_score": 1.0,
+    "min_dec_len": 1,
+    "min_dec_penalty_text": "",
+    "is_unidirectional": 1,
+    "task_prompt": "Paraphrasing",
+    "mask_type": "sentence"
     }
-    getPost(payload)
+    rst = FreeQA.create(**payload)
+    print(rst["result"])
 
 def click_run_words(args: dict):
+    wenxin_api.ak = args["API Key"].get()
+    wenxin_api.sk = args["Secret Key"].get()
     synonym = ''
     antonym = ''
     interpretation = ''
     if args["CheckButton-近义词"].get() == '1':
         print("近义词 ",end = '')
         payload={
-        'text': '“' + args["词语输入框"].get() + '”的近义词是：“[MASK]”',
-        'seq_len': 16,
-        'task_prompt': '',
-        'dataset_prompt': '',
-        'topk': 1,
-        'stop_token': '',
-        'access_token': getToken(args)
+        "text": '“' + args["词语输入框"].get() + '”的近义词是：',
+        "seq_len": 16,
+        "topp": 0.0,
+        "penalty_score": 1.0,
+        "min_dec_len": 1,
+        "min_dec_penalty_text": "",
+        "is_unidirectional": 1,
+        "task_prompt": "QA_Closed_book",
+        "mask_type": "word"
         }
-        synonym = getPost(payload)
+        rst = FreeQA.create(**payload)
+        print(rst["result"])
+        synonym = rst["result"]
     if args["CheckButton-反义词"].get() == '1':
         print("反义词 ",end = '')
         payload={
-        'text': '“' + args["词语输入框"].get() + '”的反义词是：“[MASK]”',
-        'seq_len': 16,
-        'task_prompt': '',
-        'dataset_prompt': '',
-        'topk': 1,
-        'stop_token': '',
-        'access_token': getToken(args)
+        "text": '“' + args["词语输入框"].get() + '”的反义词是：',
+        "seq_len": 16,
+        "topp": 0.0,
+        "penalty_score": 1.0,
+        "min_dec_len": 1,
+        "min_dec_penalty_text": "",
+        "is_unidirectional": 1,
+        "task_prompt": "QA_Closed_book",
+        "mask_type": "word"
         }
-        antonym = getPost(payload)
+        rst = FreeQA.create(**payload)
+        print(rst["result"])
+        antonym = rst["result"]
     if args["CheckButton-释义"].get() == '1':
         print("释义 ",end = '')
         payload={
-        'text': '“' + args["词语输入框"].get() + '”的释义是：“[MASK]”',
-        'seq_len': 16,
-        'task_prompt': '',
-        'dataset_prompt': '',
-        'topk': 1,
-        'stop_token': '',
-        'access_token': getToken(args)
+        "text": '“' + args["词语输入框"].get() + '”的释义是：',
+        "seq_len": 32,
+        "topp": 0.0,
+        "penalty_score": 1.0,
+        "min_dec_len": 1,
+        "min_dec_penalty_text": "",
+        "is_unidirectional": 1,
+        "task_prompt": "QA_Closed_book",
+        "mask_type": "paragraph"
         }
-        interpretation = getPost(payload)
+        rst = FreeQA.create(**payload)
+        print(rst["result"])
+        interpretation = rst["result"]
     if args["CheckButton-近义词"].get() == '1':
         print("\n近义词：" + synonym)
     if args["CheckButton-反义词"].get() == '1':
@@ -198,30 +222,38 @@ def click_run_words(args: dict):
         print("您没有选中任何一个需要的功能，请点击需要的功能前的方框。")
 
 def click_run_rhyme(args: dict):
+    wenxin_api.ak = args["API Key"].get()
+    wenxin_api.sk = args["Secret Key"].get()
     payload={
-    'text': '问题：与“' + args["押韵输入框"].get() + '”字押韵的字有哪些？回答：很多，比如：',
-    'seq_len': 64,
-    'min_dec_len': 1,
-    'task_prompt': '',
-    'dataset_prompt': '',
-    'topk': 1,
-    'stop_token': '',
-    'access_token': getToken(args)
+    "text": '问题：与“' + args["押韵输入框"].get() + '”字押韵的字有哪些？回答：很多，比如：',
+    "seq_len": 16,
+    "topp": 0.0,
+    "penalty_score": 1.2,
+    "min_dec_len": 1,
+    "min_dec_penalty_text": "",
+    "is_unidirectional": 0,
+    "task_prompt": "QA_Closed_book",
+    "mask_type": "word"
     }
-    getPost(payload)
+    rst = FreeQA.create(**payload)
+    print(rst["result"])
 
 def click_run_rhyme_words(args: dict):
+    wenxin_api.ak = args["API Key"].get()
+    wenxin_api.sk = args["Secret Key"].get()
     payload={
-    'text': '问题：含“' + args["组词输入框"].get() + '”字的词语有哪些？回答：',
-    'seq_len': 64,
-    'min_dec_len': 1,
-    'task_prompt': '',
-    'dataset_prompt': '',
-    'topk': 1,
-    'stop_token': '',
-    'access_token': getToken(args)
+    "text": '问题：含“' + args["组词输入框"].get() + '”字的词语有哪些？回答：',
+    "seq_len": 32,
+    "topp": 0.0,
+    "penalty_score": 1.2,
+    "min_dec_len": 1,
+    "min_dec_penalty_text": "",
+    "is_unidirectional": 0,
+    "task_prompt": "QA_Closed_book",
+    "mask_type": "word"
     }
-    getPost(payload)
+    rst = FreeQA.create(**payload)
+    print(rst["result"])
 
 def yanggu_callback(event):
     webbrowser.open_new("https://wenxin.baidu.com/younger/apiDetail?id=20006")
@@ -303,25 +335,22 @@ q_gui.add_notebook_tool(HorizontalToolsCombine(
     tab_index = 3,
     text = "请选择所需的作文体裁。"))
 q_gui.add_notebook_tool(HorizontalToolsCombine(
-    [InputBox(name="作文输入框最多字数", label_info="最多字数", default="256")],
+    [InputBox(name="作文输入框最多字数", label_info="最多字数", default="512")],
     tab_index=3,
     text="字数输入为整数，介于1到1000之间，字数越多所需时间越久。"))
 q_gui.add_notebook_tool(HorizontalToolsCombine(
-    [InputBox(name="作文输入框最少字数", label_info="最少字数", default="100"),
+    [InputBox(name="作文输入框最少字数", label_info="最少字数", default="128"),
      BaseButton(bind_func=click_run_zuowen)],
      tab_index = 3))
 # 摘要
 q_gui.add_notebook_tool(HorizontalToolsCombine(
-    [InputBox(name="摘要输入框", label_info="请输入文本", default='''19号，印度一些主流媒体发布消息称，
-汉语普通话被批准成为巴基斯坦官方语言！消息称，巴基斯坦参议院19号通过将汉语普通话作为官方语言的议案，如果普通话成为巴基斯坦官方语言，
-中巴关系会进一步深化，两国人民在中巴经济走廊建设中的沟通也会变得更简单。到底是不是真消息呢？据记者了解，事实上，
-该决议只是提到鼓励学习中国官方语言，并没有提到汉语普通话要成为巴基斯坦的官方语言。'''),
+    [InputBox(name="摘要输入框", label_info="请输入文本", default='外媒7月18日报道，阿联酋政府当日证实该国将建设首个核电站，以应对不断上涨的用电需求。分析称阿联酋作为世界第三大石油出口国，更愿意将该能源用于出口，而非发电。首座核反应堆预计在2017年运行。cntv李婉然编译报道'),
     BaseButton(bind_func=click_run_summarization)],
     tab_index = 4,
     text = "框内输入需要生成摘要的文本，点击开始执行，控制台会返回生成的摘要。"))
 # 古诗
 q_gui.add_notebook_tool(HorizontalToolsCombine(
-    [InputBox(name="古诗输入框", label_info="请输入文本", default="小小黄花尔许愁。楚事悠悠。")],
+    [InputBox(name="古诗输入框", label_info="请输入文本", default="小小黄花尔许愁，")],
     tab_index = 5,
     text = "框内输入古诗的开头，点击开始执行，控制台会返回生成的古诗续写内容。若生成结果不理想可尝试在文本后加逗号。"))
 q_gui.add_notebook_tool(HorizontalToolsCombine(

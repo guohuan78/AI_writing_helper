@@ -2,7 +2,7 @@
 
 ## 软件截图
 
-![软件截图](软件截图.png)
+![软件截图](images_doc/软件截图.png)
 
 ## 方案背景
 
@@ -22,9 +22,9 @@
 
 ### 编程环境
 
-python 版本 3.9.1
+python 版本 3.9.1	
 
-qgui 版本 0.6.2
+qgui 版本 0.6.3
 
 ### 安装依赖
 
@@ -34,19 +34,11 @@ pip install qgui
 
 其他用到的库：requests，json，webbrowser，os
 
-### 注意事项
-
-`AI_writing_helper.py` 文件第 19 行，请仔细阅读。为了软件需求更改了一点点 `qgui` 的文件，更改后的文件也已经上传，可以选择做相同修改，也可以选择注释掉作者添加的部分，不影响软件功能。
-
 ### 运行源码
-
-直接运行 `AI_writing_helper.py` 即可。
 
 ```
 python AI_writing_helper.py
 ```
-
-
 
 ## 打包软件
 
@@ -64,7 +56,7 @@ pip install pyinstaller
 
 直接打包，运行打包后的软件出现类似以下问题：
 
-![直接打包软件报错](直接打包软件报错.png)
+![直接打包软件报错](images_doc/直接打包软件报错.png)
 
 找不到 `double_down.png`，给的是一个很长的temp路径不存在。（原问题错误没有截屏，和这个错误就最后一行不一样）
 
