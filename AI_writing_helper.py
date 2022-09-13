@@ -21,7 +21,7 @@ q_gui = CreateQGUI(title="AI写作外挂",
                    style=QStyle.lumen)
 
 q_gui.set_navigation_about(author="郭睆（huàn）",
-                           version="1.3.0",
+                           version="1.3.1",
                            github_url="https://github.com/guohuan78",
                            bilibili_url="https://space.bilibili.com/518491096?spm_id_from=333.1007.0.0",
                            blog_url="https://guohuan78.github.io/"
@@ -281,7 +281,9 @@ def get_API_Key():
     else:
         MessageBox.info('''
 本软件依赖文心大模型，需要申请 key 并填写方可使用，申请免费。
-将自动为您打开申请网站，请到网站最下方调用专区点击“申请调用”，登陆百度账号，复制 API Key 和 Secret Key，填写到软件中方可使用。
+将自动为您打开申请网站，请点击网站右上方“登录”，登录百度账号。
+鼠标移动到右上角头像，点击“查看AK/SK",点击“创建API key”。
+复制 API Key 和 Secret Key，填写到软件中方可使用。
 保存 key 以后将不会出现此弹窗。
 ''')
         webbrowser.open_new("https://wenxin.baidu.com/younger/apiDetail?id=20006")
