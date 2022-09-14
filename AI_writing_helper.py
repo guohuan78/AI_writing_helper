@@ -21,7 +21,7 @@ q_gui = CreateQGUI(title="AI写作外挂",
                    style=QStyle.lumen)
 
 q_gui.set_navigation_about(author="郭睆（huàn）",
-                           version="1.3.1",
+                           version="1.3.2",
                            github_url="https://github.com/guohuan78",
                            bilibili_url="https://space.bilibili.com/518491096?spm_id_from=333.1007.0.0",
                            blog_url="https://guohuan78.github.io/"
@@ -256,7 +256,7 @@ def click_run_rhyme_words(args: dict):
     print(rst["result"])
 
 def yanggu_callback(event):
-    webbrowser.open_new("https://wenxin.baidu.com/younger/apiDetail?id=20006")
+    webbrowser.open_new("https://wenxin.baidu.com/moduleApi/ernie3")
 
 def wechatpay_callback(event):
     q_gui.print_image("images/wechatpay.png")
@@ -286,7 +286,7 @@ def get_API_Key():
 复制 API Key 和 Secret Key，填写到软件中方可使用。
 保存 key 以后将不会出现此弹窗。
 ''')
-        webbrowser.open_new("https://wenxin.baidu.com/younger/apiDetail?id=20006")
+        webbrowser.open_new("https://wenxin.baidu.com/moduleApi/ernie3")
         return None
 
 def get_Secret_Key():
@@ -302,8 +302,8 @@ def get_Secret_Key():
 # Key 获取 API Key 和 Secret Key
 q_gui.add_notebook_tool(HorizontalToolsCombine(
     [InputBox(name="API Key", label_info="API Key", default=get_API_Key()),
-    BaseButton(bind_func=yanggu_callback, text="旸谷社区")],
-    text="点击右方按钮进入旸谷社区，网站最下方调用专区点击“申请调用”。登陆百度账号，即可获取API Key Secret Key。"))
+    BaseButton(bind_func=yanggu_callback, text="文心大模型")],
+    text="点击右方按钮进入文心大模型，网站右上方登录百度账号，点击“查看AK/SK”获取API Key Secret Key。"))
 q_gui.add_notebook_tool(HorizontalToolsCombine(
     [InputBox(name="Secret Key", label_info="Secret Key", default=get_Secret_Key()),
     BaseButton(bind_func=key_save, text="保存key")],
