@@ -22,17 +22,20 @@
 
 ### 编程环境
 
-python 版本 3.9.1	
+`python` 版本 `3.9.1`	
 
-qgui 版本 0.6.3
+`qgui `版本 `0.6.3`
+
+`wenxin_api`版本 `0.0.2`
 
 ### 安装依赖
 
 ```
 pip install qgui
+pip install wenxin_api==0.0.2
 ```
 
-其他用到的库：requests，json，webbrowser，os
+其他用到的库：`requests`，`json`，`webbrowser`，`os`
 
 ### 运行源码
 
@@ -44,7 +47,7 @@ python AI_writing_helper.py
 
 ### 编程环境
 
-pyinstaller 版本 5.2
+`pyinstaller` 版本 5.2
 
 ### 安装依赖
 
@@ -75,6 +78,8 @@ pip install pyinstaller
 
 如果不想更改的话，不影响源码的执行，打包时候可能报错。
 
+`wenxin_api` `0.1.2`版本打包后运行会报错，找不到一个文件，但是正常用源码运行不影响，作者目前仍然是使用的`0.0.2`版本
+
 ### 打包命令
 
 ```
@@ -88,3 +93,9 @@ pyinstaller -F -w -i AI写作外挂.ico AI_writing_helper.py --collect-all ttkbo
 再将 `AI写作外挂.exe` 与 `images` 文件夹一同压缩为 `AI写作外挂.zip`
 
 软件运行时必须保证，`AI写作外挂.exe` 与`images` 文件夹同级，不可单独移动其一。
+
+## 开发团队
+
+`1.x` 版本为 郭睆 一人
+
+`2.x` 版本 徐继尧 加入
