@@ -72,7 +72,6 @@ def run(payload, args, have_num, action):
             return
         if not args[action + "输入框"].get().find("%") == -1:
             print('输入内容不合法，请检查文本是否带有"%"\n')
-            words_error = True
             return
     if have_num:
         if not args[action + "输入框最多字数"].get().isdigit():
@@ -275,22 +274,20 @@ def click_run_rewrite(args: dict):
 def click_run_words(args: dict):
     global word
     if args["CheckButton-近义词"].get() == '1':
-        qps_error = True
-        while qps_error:
-            payload = {
-                "text": '“' + args["词语输入框"].get() + '”的近义词是：',
-                "seq_len": 16,
-                "topp": 0.0,
-                "penalty_score": 1.0,
-                "min_dec_len": 1,
-                "min_dec_penalty_text": "",
-                "is_unidirectional": 1,
-                "task_prompt": "QA_Closed_book",
-                "mask_type": "word"
-            }
-            run(payload, args, False, "近义词")
-            if not qps_error and words_error:
-                return
+        payload = {
+            "text": '“' + args["词语输入框"].get() + '”的近义词是：',
+            "seq_len": 16,
+            "topp": 0.0,
+            "penalty_score": 1.0,
+            "min_dec_len": 1,
+            "min_dec_penalty_text": "",
+            "is_unidirectional": 1,
+            "task_prompt": "QA_Closed_book",
+            "mask_type": "word"
+        }
+        run(payload, args, False, "近义词")
+        if words_error:
+            return
     if args["CheckButton-反义词"].get() == '1':
         payload = {
             "text": '“' + args["词语输入框"].get() + '”的反义词是：',
@@ -322,17 +319,17 @@ def click_run_words(args: dict):
         if words_error:
             return
     word = ""
-    if args["CheckButton-近义词"].get() == '1':
-        word = '近义词："' + synonym + '" '
-    if args["CheckButton-反义词"].get() == '1':
-        word = word + '反义词："' + antonym + '" '
-    if args["CheckButton-释义"].get() == '1':
-        word = word + '释义："' + interpretation + '" '
-    history_write(input_text=args["词语输入框"].get(), output_text=word, action="词语")
     if args["CheckButton-近义词"].get() == '0' and args["CheckButton-反义词"].get() == '0' and args[
         "CheckButton-释义"].get() == '0':
         print("您没有选中任何一个需要的功能，请点击需要的功能前的方框。\n")
-
+    else:
+        if args["CheckButton-近义词"].get() == '1':
+            word = '近义词："' + synonym + '" '
+        if args["CheckButton-反义词"].get() == '1':
+            word = word + '反义词："' + antonym + '" '
+        if args["CheckButton-释义"].get() == '1':
+            word = word + '释义："' + interpretation + '" '
+        history_write(input_text=args["词语输入框"].get(), output_text=word, action="词语")
 
 # 押韵
 def click_run_rhyme(args: dict):
