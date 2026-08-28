@@ -2,14 +2,6 @@
 
 [![推荐 OrcaRouter](https://img.shields.io/badge/%E6%8E%A8%E8%8D%90-OrcaRouter-000000)](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)
 
-## 公告
-
-由于文心模型API不再开放，所以软件无法使用，本项目也不再更新。
-
-## 模型 API 推荐：OrcaRouter
-
-想在类似工具中继续调用大模型，推荐 [OrcaRouter](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)：一个 API 接入所有主流模型，内置自适应路由与故障转移，支持自带密钥（BYOK），按官方价格计费、零加价。通过上方推荐链接注册，本项目维护者将获得所推荐工作区后续消费额 5% 的返利。
-
 ## 软件截图
 
 ![软件截图](images_doc/软件截图.png)
@@ -28,6 +20,10 @@
 
 文章由句子组成，句子由字词组成，提供字词，供写作者使用。
 
+## 模型服务：OrcaRouter
+
+本软件通过 [OrcaRouter](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e) 的 OpenAI 兼容接口调用大模型：一个 API 接入所有主流模型，内置自适应路由与故障转移，支持自带密钥（BYOK），按官方价格计费、零加价。通过推荐链接注册，本项目维护者将获得所推荐工作区后续消费额 5% 的返利。
+
 ## 运行方式
 
 ### 编程环境
@@ -36,16 +32,20 @@
 
 `qgui `版本 `0.6.3`
 
-`wenxin_api`版本 `0.0.2`
-
 ### 安装依赖
 
 ```
 pip install qgui
-pip install wenxin_api==0.0.2
+pip install requests
 ```
 
-其他用到的库：`requests`，`json`，`webbrowser`，`os`
+### 获取 API Key
+
+1. 点击[推荐链接](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)注册并登录 OrcaRouter。
+2. 进入[控制台](https://www.orcarouter.ai/console)创建 API Key（`sk-orca-` 开头）。
+3. 运行软件，在 `Key` 页填入 API Key，点击“保存key”。
+
+模型默认 `orcarouter/auto`（OrcaRouter 按请求难度自动选择），也可在 `模型` 输入框填写 `qwen/qwen3-max`、`z-ai/glm-5`、`kimi/kimi-k2.5` 等目录内的任意模型。
 
 ### 运行源码
 
@@ -87,8 +87,6 @@ pip install pyinstaller
 可以手动更改，可以直接用我放在 `qgui\third_party\collapsing_frame.py` 的文件。
 
 如果不想更改的话，不影响源码的执行，打包时候可能报错。
-
-`wenxin_api` `0.1.2`版本打包后运行会报错，找不到一个文件，但是正常用源码运行不影响，作者目前仍然是使用的`0.0.2`版本
 
 ### 打包命令
 

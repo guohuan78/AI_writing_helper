@@ -1,17 +1,12 @@
-# -*- encoding:utf-8 -*- 
+# -*- encoding:utf-8 -*-
 import datetime
 import json
 import os
 import time
 import webbrowser
-import wenxin_api
 from qgui.manager import QStyle
 from qgui.notebook_tools import InputBox, HorizontalToolsCombine, CheckButton, BaseButton, RadioButton
-from wenxin_api.tasks.composition import Composition
-from wenxin_api.tasks.couplet import Couplet
-from wenxin_api.tasks.free_qa import FreeQA
-from wenxin_api.tasks.summarization import Summarization
-from wenxin_api.tasks.text_generation import TextGeneration
+from orcarouter_provider import chat, OrcaRouterError, DEFAULT_MODEL
 from qgui import CreateQGUI, MessageBox
 
 # 创建主界面
@@ -19,7 +14,7 @@ q_gui = CreateQGUI(title="AI写作外挂",
                    tab_names=["Key", "续写", "病句", "作文", "摘要", "古诗", "对联", "改写", "词语", "押韵", "组词"],
                    style=QStyle.lumen)
 q_gui.set_navigation_about(author="郭睆（huàn）\n        徐继尧",
-                           version="2.1.0",
+                           version="2.2.0",
                            github_url="https://github.com/guohuan78",
                            bilibili_url="https://space.bilibili.com/518491096?spm_id_from=333.1007.0.0",
                            blog_url="https://guohuan78.github.io/"
@@ -29,7 +24,7 @@ q_gui.set_navigation_info(title="注意事项", info='''
 1.务必先填写key再选择功能
 2.有时调用需要较长时间，开始执行按钮变灰表示正在调用，请耐心等待。
 3.QQ交流群：344389127
-4.每个账号的Key单日调用上限为200次，总调用上限为2000次，此限制为所调用的文心大模型本身的限制作者也无能为力。
+4.模型调用会消耗 OrcaRouter 账户余额，请留意用量与额度。
 5.软件完全免费，欢迎赞赏。
 ''')
 
@@ -52,10 +47,8 @@ def clear_desktop(event):
 
 # 调用api与异常处理
 def run(payload, args, have_num, action):
-    wenxin_api.ak = args["API Key"].get()
-    wenxin_api.sk = args["Secret Key"].get()
     history_save(args=args)
-    global synonym, antonym, interpretation, words_error, qps_error
+    global synonym, antonym, interpretation, words_error
     words_error = False
     if action == "近义词" or action == "反义词" or action == "释义":
         if not args["词语输入框"].get():
@@ -87,89 +80,61 @@ def run(payload, args, have_num, action):
             print("最多字数必须小于等于1000\n")
             return
         if int(args[action + "输入框最多字数"].get()) < 1:
-            print("最多字数必须大于等于1\n")
+            print("最多字数必须小于等于1000\n")
             return
         if int(args[action + "输入框最多字数"].get()) < int(args[action + "输入框最少字数"].get()):
             print("最少字数必须小于等于最大生成长度\n")
             return
+    prompt = payload["text"]
+    if have_num:
+        prompt = prompt + '\n字数要求：不少于' + args[action + "输入框最少字数"].get() + '字。'
+    max_tokens = int(int(payload["seq_len"]) * 1.5) + 16
+    api_key = args["API Key"].get()
+    model = args["模型"].get().strip() or DEFAULT_MODEL
     try:
-        if action == "续写":
-            rst = TextGeneration.create(**payload)
-        elif action == "病句" or action == "改写" or action == "押韵" or action == "组词" or action == "近义词" or action == "反义词" or action == "释义":
-            rst = FreeQA.create(**payload)
-        elif action == "作文":
-            rst = Composition.create(**payload)
-        elif action == "摘要":
-            rst = Summarization.create(**payload)
-        elif action == "古诗":
-            rst = TextGeneration.create(**payload)
-        elif action == "对联":
-            rst = Couplet.create(**payload)
-    except Exception as e:
-        e = str(e)
-        if e.find("1000001:", 15, 23) == 15:
+        result = chat(prompt, api_key, model=model, max_tokens=max_tokens,
+                      temperature=payload.get("temperature", 0.7))
+    except OrcaRouterError as e:
+        if e.code == "rate_limit":
+            time.sleep(1)
+            try:
+                result = chat(prompt, api_key, model=model, max_tokens=max_tokens,
+                              temperature=payload.get("temperature", 0.7))
+            except OrcaRouterError as retry_error:
+                print("调用过于频繁，请稍后重试，错误信息：" + str(retry_error) + "\n")
+                words_error = True
+                return
+        elif e.code == "bad_key" or e.code == "no_key":
             print("请检查key\n")
             words_error = True
             return
-        elif e.find("18:", 15, 18) == 15:
-            time.sleep(1)
-            if action == "近义词":
-                run(payload, args, False, "近义词")
-            if action == "反义词":
-                run(payload, args, False, "反义词")
-            if action == "释义":
-                run(payload, args, False, "释义")
-            if action == "续写":
-                click_run_custom(args=args)
-            if action == "病句":
-                click_run_correction(args=args)
-            if action == "作文":
-                click_run_zuowen(args=args)
-            if action == "摘要":
-                click_run_summarization(args=args)
-            if action == "古诗":
-                click_run_poetry(args=args)
-            if action == "对联":
-                click_run_couplet(args=args)
-            if action == "改写":
-                click_run_rewrite(args=args)
-            if action == "押韵":
-                click_run_rhyme(args=args)
-            if action == "组词":
-                click_run_rhyme_words(args=args)
         else:
-            print("未知错误，请联系开发者，错误信息：" + e + "\n")
+            print("未知错误，请联系开发者，错误信息：" + str(e) + "\n")
             words_error = True
             return
     else:
         if action == "近义词" or action == "反义词" or action == "释义":
             if action == "近义词":
-                synonym = rst["result"].strip()
+                synonym = result.strip()
                 print("词语 " + action + " " + synonym + "\n")
             if action == "反义词":
-                antonym = rst["result"].strip()
+                antonym = result.strip()
                 print("词语 " + action + " " + antonym + "\n")
             if action == "释义":
-                interpretation = rst["result"].strip()
+                interpretation = result.strip()
                 print("词语 " + action + " " + interpretation + "\n")
         else:
-            print(action + " " + rst["result"] + "\n")
-            history_write(input_text=args[action + "输入框"].get(), output_text=rst["result"], action=action)
+            print(action + " " + result + "\n")
+            history_write(input_text=args[action + "输入框"].get(), output_text=result, action=action)
 
 
 # 运行按钮对应函数
 # 续写
 def click_run_custom(args: dict):
     payload = {
-        "text": args["续写输入框"].get(),
+        "text": args["续写输入框"].get() + '\n\n（接着上面的内容继续写，不要重复原文。）',
         "seq_len": args["续写输入框最多字数"].get(),
-        "topp": 0.8,
-        "penalty_score": 1.2,
-        "min_dec_len": args["续写输入框最少字数"].get(),
-        "min_dec_penalty_text": "",
-        "is_unidirectional": 1,
-        "task_prompt": "SENT",
-        "mask_type": "sentence"
+        "temperature": 0.8
     }
     run(payload, args, True, "续写")
 
@@ -179,13 +144,7 @@ def click_run_correction(args: dict):
     payload = {
         "text": '改正下面文本中的错误：\"' + args["病句输入框"].get() + '\"',
         "seq_len": 64,
-        "topp": 0.0,
-        "penalty_score": 1.2,
-        "min_dec_len": 1,
-        "min_dec_penalty_text": "",
-        "is_unidirectional": 0,
-        "task_prompt": "Correction",
-        "mask_type": "sentence"
+        "temperature": 0.2
     }
     run(payload, args, False, "病句")
 
@@ -195,13 +154,7 @@ def click_run_zuowen(args: dict):
     payload = {
         "text": '作文题目：' + args["作文输入框"].get() + '\n体裁：' + args["RadioButton"].get() + '\n内容：',
         "seq_len": args["作文输入框最多字数"].get(),
-        "topp": 0.8,
-        "penalty_score": 1.2,
-        "min_dec_len": args["作文输入框最少字数"].get(),
-        "min_dec_penalty_text": "[gEND]",
-        "is_unidirectional": 0,
-        "task_prompt": "zuowen",
-        "mask_type": "paragraph"
+        "temperature": 0.8
     }
     run(payload, args, True, "作文")
 
@@ -211,13 +164,7 @@ def click_run_summarization(args: dict):
     payload = {
         "text": '请给下面这段话写一句摘要：“' + args["摘要输入框"].get() + '”',
         "seq_len": 512,
-        "topp": 0.0,
-        "penalty_score": 1.0,
-        "min_dec_len": 4,
-        "min_dec_penalty_text": "",
-        "is_unidirectional": 0,
-        "task_prompt": "Text2Annotation",
-        "mask_type": "sentence"
+        "temperature": 0.2
     }
     run(payload, args, False, "摘要")
 
@@ -227,13 +174,7 @@ def click_run_poetry(args: dict):
     payload = {
         "text": '古诗续写：' + args["古诗输入框"].get(),
         "seq_len": args["古诗输入框最多字数"].get(),
-        "topp": 0.8,
-        "penalty_score": 1.0,
-        "min_dec_len": args["古诗输入框最少字数"].get(),
-        "min_dec_penalty_text": "",
-        "is_unidirectional": 1,
-        "task_prompt": "SENT",
-        "mask_type": "sentence"
+        "temperature": 0.8
     }
     run(payload, args, True, "古诗")
 
@@ -243,13 +184,7 @@ def click_run_couplet(args: dict):
     payload = {
         "text": '上联:' + args["对联输入框"].get() + ' 下联:',
         "seq_len": 32,
-        "topp": 0.8,
-        "penalty_score": 1.0,
-        "min_dec_len": 1,
-        "min_dec_penalty_text": "",
-        "is_unidirectional": 1,
-        "task_prompt": "couplet",
-        "mask_type": "sentence"
+        "temperature": 0.8
     }
     run(payload, args, False, "对联")
 
@@ -259,13 +194,7 @@ def click_run_rewrite(args: dict):
     payload = {
         "text": '“' + args["改写输入框"].get() + '”换种表达，意思不变：',
         "seq_len": 64,
-        "topp": 0.0,
-        "penalty_score": 1.0,
-        "min_dec_len": 1,
-        "min_dec_penalty_text": "",
-        "is_unidirectional": 1,
-        "task_prompt": "Paraphrasing",
-        "mask_type": "sentence"
+        "temperature": 0.2
     }
     run(payload, args, False, "改写")
 
@@ -277,13 +206,7 @@ def click_run_words(args: dict):
         payload = {
             "text": '“' + args["词语输入框"].get() + '”的近义词是：',
             "seq_len": 16,
-            "topp": 0.0,
-            "penalty_score": 1.0,
-            "min_dec_len": 1,
-            "min_dec_penalty_text": "",
-            "is_unidirectional": 1,
-            "task_prompt": "QA_Closed_book",
-            "mask_type": "word"
+            "temperature": 0.2
         }
         run(payload, args, False, "近义词")
         if words_error:
@@ -292,13 +215,7 @@ def click_run_words(args: dict):
         payload = {
             "text": '“' + args["词语输入框"].get() + '”的反义词是：',
             "seq_len": 16,
-            "topp": 0.0,
-            "penalty_score": 1.0,
-            "min_dec_len": 1,
-            "min_dec_penalty_text": "",
-            "is_unidirectional": 1,
-            "task_prompt": "QA_Closed_book",
-            "mask_type": "word"
+            "temperature": 0.2
         }
         run(payload, args, False, "反义词")
         if words_error:
@@ -307,13 +224,7 @@ def click_run_words(args: dict):
         payload = {
             "text": '“' + args["词语输入框"].get() + '”的释义是：',
             "seq_len": 32,
-            "topp": 0.0,
-            "penalty_score": 1.0,
-            "min_dec_len": 1,
-            "min_dec_penalty_text": "",
-            "is_unidirectional": 1,
-            "task_prompt": "QA_Closed_book",
-            "mask_type": "paragraph"
+            "temperature": 0.2
         }
         run(payload, args, False, "释义")
         if words_error:
@@ -336,13 +247,7 @@ def click_run_rhyme(args: dict):
     payload = {
         "text": '问题：与“' + args["押韵输入框"].get() + '”字押韵的字有哪些？回答：很多，比如：',
         "seq_len": 16,
-        "topp": 0.0,
-        "penalty_score": 1.2,
-        "min_dec_len": 1,
-        "min_dec_penalty_text": "",
-        "is_unidirectional": 0,
-        "task_prompt": "QA_Closed_book",
-        "mask_type": "word"
+        "temperature": 0.2
     }
     run(payload, args, False, "押韵")
 
@@ -352,19 +257,13 @@ def click_run_rhyme_words(args: dict):
     payload = {
         "text": '问题：含“' + args["组词输入框"].get() + '”字的词语有哪些？回答：',
         "seq_len": 32,
-        "topp": 0.0,
-        "penalty_score": 1.2,
-        "min_dec_len": 1,
-        "min_dec_penalty_text": "",
-        "is_unidirectional": 0,
-        "task_prompt": "QA_Closed_book",
-        "mask_type": "word"
+        "temperature": 0.2
     }
     run(payload, args, False, "组词")
 
 
-def yanggu_callback(event):
-    webbrowser.open_new("https://wenxin.baidu.com/user/key")
+def orca_callback(event):
+    webbrowser.open_new("https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e")
 
 
 def wechatpay_callback(event):
@@ -379,7 +278,7 @@ def key_save(args: dict):
 def history_save(args: dict):
     history = {
         "API Key": args["API Key"].get(),
-        "Secret Key": args["Secret Key"].get(),
+        "模型": args["模型"].get(),
         "continue_text": args["续写输入框"].get(),
         "continue_text_max": args["续写输入框最多字数"].get(),
         "continue_text_min": args["续写输入框最少字数"].get(),
@@ -400,7 +299,7 @@ def history_save(args: dict):
         "word_text_paraphrase": args["CheckButton-释义"].get(),
         "rhyme_text": args["押韵输入框"].get(),
         "group_words_text": args["组词输入框"].get(),
-        "version": "2.1.0"
+        "version": "2.2.0"
     }
     history = json.dumps(history)
     f = open('history.json', 'w')
@@ -426,23 +325,23 @@ def get_API_Key():
         return history['API Key']
     else:
         MessageBox.info('''
-本软件依赖文心大模型，需要申请 key 并填写方可使用，申请免费。
-将自动为您打开申请网站，请点击网站中的“立即登录”，登录百度账号后并点击“创建API key”。
-复制 API Key 和 Secret Key，填写到软件中方可使用。
+本软件通过 OrcaRouter 调用大模型，需要填写 API Key 方可使用。
+将自动为您打开 OrcaRouter 网站，注册并登录后，在控制台创建 API Key（sk-orca- 开头）。
+复制 API Key，填写到软件中方可使用。
 保存 key 以后将不会出现此弹窗。
 ''')
-        webbrowser.open_new("https://wenxin.baidu.com/user/key")
+        webbrowser.open_new("https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e")
         return None
 
 
-def get_Secret_Key():
+def get_Model():
     if os.path.exists('history.json'):
         f = open('history.json', 'r')
         content = f.read()
         history = json.loads(content)
-        return history['Secret Key']
+        return history.get('模型', DEFAULT_MODEL)
     else:
-        return None
+        return DEFAULT_MODEL
 
 
 def start_history(event):
@@ -457,16 +356,16 @@ def print_QQ(event):
 
 
 # 创建控制台元素
-# Key 获取 API Key 和 Secret Key
+# Key 获取 API Key
 clear_desktop("")
 q_gui.add_notebook_tool(HorizontalToolsCombine(
     [InputBox(name="API Key", label_info="API Key", default=get_API_Key()),
-     BaseButton(bind_func=yanggu_callback, text="文心大模型")],
-    text="点击右方按钮进入文心大模型，登录百度账号后创建API key。将API Key和Secret Key填入对应位置。"))
+     BaseButton(bind_func=orca_callback, text="获取 OrcaRouter Key")],
+    text="点击右方按钮进入 OrcaRouter，注册后在控制台创建 API Key（sk-orca- 开头），填入左侧输入框。"))
 q_gui.add_notebook_tool(HorizontalToolsCombine(
-    [InputBox(name="Secret Key", label_info="Secret Key", default=get_Secret_Key()),
+    [InputBox(name="模型", label_info="模型", default=get_Model()),
      BaseButton(bind_func=key_save, text="保存key")],
-    text="为避免每次打开软件都需要重复输入key，点击右方按钮可以保存key，明文存储在同级目录 history.json中，谨防泄露。"))
+    text="模型默认 orcarouter/auto（自动选择），也可填写 qwen/qwen3-max、z-ai/glm-5、kimi/kimi-k2.5 等。点击右方按钮可以保存设置，明文存储在同级目录 history.json中，谨防泄露。"))
 q_gui.add_notebook_tool(HorizontalToolsCombine(
     [BaseButton(bind_func=start_history, text="查看历史记录"),
      BaseButton(bind_func=wechatpay_callback, text="赞赏作者"),
