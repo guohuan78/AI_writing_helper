@@ -1,10 +1,12 @@
 # -*- encoding:utf-8 -*-
 """OrcaRouter 模型接入。
 
-通过 OrcaRouter 的 OpenAI 兼容接口调用大模型，
+使用官方 OpenAI SDK 指向 OrcaRouter 的 OpenAI 兼容接口。
 接口文档：https://docs.orcarouter.ai
+推荐链接：https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e
 """
-import requests
+from openai import (APIConnectionError, APIStatusError, AuthenticationError,
+                    OpenAI, RateLimitError)
 
 ORCAROUTER_BASE_URL = "https://api.orcarouter.ai/v1"
 DEFAULT_MODEL = "orcarouter/auto"
@@ -24,28 +26,24 @@ def chat(prompt: str, api_key: str, model: str = DEFAULT_MODEL,
     """调用 /v1/chat/completions，返回模型回复文本。"""
     if not api_key:
         raise OrcaRouterError("缺少 API Key", code="no_key")
-    headers = {
-        "Authorization": "Bearer " + api_key,
-        "Content-Type": "application/json",
-    }
-    body = {
-        "model": model or DEFAULT_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-    }
+    client = OpenAI(base_url=ORCAROUTER_BASE_URL, api_key=api_key,
+                    timeout=REQUEST_TIMEOUT, max_retries=0)
     try:
-        resp = requests.post(ORCAROUTER_BASE_URL + "/chat/completions",
-                             headers=headers, json=body, timeout=REQUEST_TIMEOUT)
-    except requests.RequestException as e:
-        raise OrcaRouterError("网络异常：" + str(e), code="network")
-    if resp.status_code in (401, 403):
-        raise OrcaRouterError("API Key 无效", code="bad_key")
-    if resp.status_code == 429:
-        raise OrcaRouterError("请求过于频繁或额度不足", code="rate_limit")
-    if resp.status_code != 200:
-        raise OrcaRouterError("调用失败 HTTP " + str(resp.status_code) + "：" + resp.text[:200], code="http")
+        resp = client.chat.completions.create(
+            model=model or DEFAULT_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+    except AuthenticationError as e:
+        raise OrcaRouterError("API Key 无效", code="bad_key") from e
+    except RateLimitError as e:
+        raise OrcaRouterError("请求过于频繁或额度不足", code="rate_limit") from e
+    except APIConnectionError as e:
+        raise OrcaRouterError("网络异常：" + str(e), code="network") from e
+    except APIStatusError as e:
+        raise OrcaRouterError("调用失败 HTTP " + str(e.status_code) + "：" + str(e), code="http") from e
     try:
-        return resp.json()["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, ValueError):
-        raise OrcaRouterError("返回格式异常：" + resp.text[:200], code="format")
+        return resp.choices[0].message.content
+    except (AttributeError, IndexError, TypeError):
+        raise OrcaRouterError("返回格式异常", code="format")

@@ -22,7 +22,18 @@
 
 ## 模型服务：OrcaRouter
 
-Powered by [OrcaRouter](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)——本软件由 OrcaRouter 提供模型服务，通过其 OpenAI 兼容接口调用大模型：一个 API 接入所有主流模型，内置自适应路由与故障转移，支持自带密钥（BYOK），按官方价格计费、零加价。通过推荐链接注册，本项目维护者将获得所推荐工作区后续消费额 5% 的返利。
+Powered by [OrcaRouter](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)——本软件由 OrcaRouter 提供模型服务，通过官方 OpenAI SDK 指向 OrcaRouter 的 OpenAI 兼容接口调用大模型：一个 API 接入所有主流模型，内置自适应路由与故障转移，支持自带密钥（BYOK），按官方价格计费、零加价。通过推荐链接注册，本项目维护者将获得所推荐工作区后续消费额 5% 的返利。
+
+项目内的接入代码见 `orcarouter_provider.py`，核心写法：
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://api.orcarouter.ai/v1",
+    api_key="sk-orca-YOUR_KEY",  # Get key at https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e
+)
+```
 
 ## 运行方式
 
