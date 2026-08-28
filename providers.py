@@ -121,22 +121,40 @@ def _anthropic_error(status_code, text):
     return LLMError("调用失败 HTTP %d：%s" % (status_code, (text or "")[:200]), code="http")
 
 
+def _anthropic_text(data):
+    return "".join(block.get("text", "") for block in data.get("content", [])
+                   if block.get("type") == "text")
+
+
 def messages_chat(base_url, api_key, model, messages, max_tokens=512, temperature=0.7):
-    """Anthropic Messages 协议非流式调用，返回完整文本。"""
-    payload = _to_anthropic_payload(messages, model, max_tokens, temperature)
-    try:
-        resp = httpx.post(_messages_endpoint(base_url), json=payload,
-                          headers=_anthropic_headers(api_key), timeout=REQUEST_TIMEOUT)
-    except httpx.HTTPError as e:
-        raise LLMError("网络异常：" + str(e), code="network") from e
-    if resp.status_code != 200:
-        raise _anthropic_error(resp.status_code, resp.text)
-    try:
-        data = resp.json()
-        return "".join(block.get("text", "") for block in data.get("content", [])
-                       if block.get("type") == "text")
-    except (ValueError, AttributeError, TypeError):
-        raise LLMError("返回格式异常：" + resp.text[:200], code="format")
+    """Anthropic Messages 协议非流式调用，返回完整文本。
+
+    思考型模型（返回 thinking 块）可能把 max_tokens 全部耗在思考上、
+    没有产出正文（stop_reason=max_tokens）——此时自动加大预算重试一次。
+    """
+    budget = max_tokens
+    for attempt in range(3):
+        payload = _to_anthropic_payload(messages, model, budget, temperature)
+        try:
+            resp = httpx.post(_messages_endpoint(base_url), json=payload,
+                              headers=_anthropic_headers(api_key), timeout=REQUEST_TIMEOUT)
+        except httpx.HTTPError as e:
+            raise LLMError("网络异常：" + str(e), code="network") from e
+        if resp.status_code != 200:
+            raise _anthropic_error(resp.status_code, resp.text)
+        try:
+            data = resp.json()
+            text = _anthropic_text(data)
+        except (ValueError, AttributeError, TypeError):
+            raise LLMError("返回格式异常：" + resp.text[:200], code="format")
+        if text:
+            return text
+        if attempt < 2 and data.get("stop_reason") == "max_tokens":
+            budget = min(budget * 4, 32000)
+            continue
+        raise LLMError("模型没有输出正文（思考占用了全部输出预算，已自动加大重试）",
+                       code="format")
+    raise LLMError("模型没有输出正文", code="format")
 
 
 def messages_chat_stream(base_url, api_key, model, messages,
@@ -204,6 +222,19 @@ def _messages(prompt):
     return prompt
 
 
+def _anthropic_stream_with_rescue(url, api_key, model, messages, max_tokens, temperature):
+    """流式输出；若一个字都没吐出（思考烧光预算），退回带自适应重试的非流式。"""
+    got = False
+    for text in messages_chat_stream(url, api_key, model, messages,
+                                     max_tokens, temperature):
+        got = True
+        yield text
+    if not got:
+        text = messages_chat(url, api_key, model, messages, max_tokens, temperature)
+        if text:
+            yield text
+
+
 def chat(prompt, api_key, model="", provider="orcarouter", base_url="",
          max_tokens=512, temperature=0.7):
     """非流式调用，返回完整回复文本。仅支持 Messages 协议的模型自动切换。"""
@@ -235,8 +266,8 @@ def chat_stream(prompt, api_key, model="", provider="orcarouter", base_url="",
     real_model = resolve_model(provider, model)
     messages = _messages(prompt)
     if _protocol_cache.get((url, real_model)) == "anthropic":
-        yield from messages_chat_stream(url, api_key, real_model, messages,
-                                        max_tokens, temperature)
+        yield from _anthropic_stream_with_rescue(url, api_key, real_model, messages,
+                                                 max_tokens, temperature)
         return
     client = _client(api_key, url)
     try:
@@ -246,8 +277,8 @@ def chat_stream(prompt, api_key, model="", provider="orcarouter", base_url="",
     except _ERROR_TYPES as e:
         if _messages_api_required(e):
             _protocol_cache[(url, real_model)] = "anthropic"
-            yield from messages_chat_stream(url, api_key, real_model, messages,
-                                            max_tokens, temperature)
+            yield from _anthropic_stream_with_rescue(url, api_key, real_model, messages,
+                                                     max_tokens, temperature)
             return
         raise _wrap(e) from e
     try:

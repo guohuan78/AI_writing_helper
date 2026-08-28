@@ -174,12 +174,18 @@ def parse_draft_output(stdout):
     return None, None
 
 
+def _absolute_export_path(state):
+    """CLI 在 wechat-publisher 目录里执行，相对导出路径必须先转绝对路径。"""
+    path = state["export_path"]
+    return path if os.path.isabs(path) else os.path.abspath(path)
+
+
 def render_preview(publisher_dir, state):
     state = dict(state)
     if not state.get("export_path"):
         raise gr.Error("请先在第 6 步导出 Markdown")
     try:
-        proc = run_publisher(["render", state["export_path"], "-o", PREVIEW_HTML], publisher_dir, 60)
+        proc = run_publisher(["render", _absolute_export_path(state), "-o", PREVIEW_HTML], publisher_dir, 60)
     except PublisherError as e:
         raise gr.Error(str(e))
     if proc.returncode != 0:
@@ -195,7 +201,7 @@ def send_draft(publisher_dir, state):
     if not state.get("export_path"):
         raise gr.Error("请先在第 6 步导出 Markdown")
     try:
-        proc = run_publisher(["draft", state["export_path"]], publisher_dir, 240)
+        proc = run_publisher(["draft", _absolute_export_path(state)], publisher_dir, 240)
     except PublisherError as e:
         raise gr.Error(str(e))
     kind, draft_id = parse_draft_output(proc.stdout)
@@ -257,7 +263,7 @@ def gen_rewrites(rewrite_text, strength, api_key, model, provider, base_url):
     try:
         for _ in range(3):
             out = chat(messages, api_key, model=model, provider=provider,
-                       base_url=base_url, max_tokens=1500, temperature=0.85)
+                       base_url=base_url, max_tokens=6000, temperature=0.85)
             versions.append(out.strip())
     except LLMError as e:
         raise gr.Error("调用失败：" + str(e))
@@ -285,7 +291,7 @@ def gen_cover(api_key, model, provider, base_url, state):
                     title=state["title"], digest=state["body"][:300])}]
     try:
         out = chat(messages, api_key, model=model, provider=provider,
-                   base_url=base_url, max_tokens=400, temperature=0.9)
+                   base_url=base_url, max_tokens=2000, temperature=0.9)
     except LLMError as e:
         raise gr.Error("调用失败：" + str(e))
     return out.strip()
@@ -331,11 +337,12 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, provider, base_url,
 
     used = corpus.past_angles(topic)
     text = ""
-    for partial in stream_text("topics", api_key, model, 0.9, 800, topic=topic,
+    for partial in stream_text("topics", api_key, model, 0.9, 3000, topic=topic,
                                audience=audience,
                                avoid="\n".join("- " + a for a in used) or "（无）",
                                provider=provider, base_url=base_url):
         text = partial
+        yield emit(topics_md=partial)
     warn = warning_message(text)
     if warn:
         raise gr.Error(warn)
@@ -348,9 +355,10 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, provider, base_url,
                log=note("✅ ① 选定角度：%s\n\n⏳ ② 生成标题候选…" % state["angle"]))
 
     text = ""
-    for partial in stream_text("titles", api_key, model, 0.95, 600, topic=topic,
+    for partial in stream_text("titles", api_key, model, 0.95, 3000, topic=topic,
                                angle=state["angle"], provider=provider, base_url=base_url):
         text = partial
+        yield emit(titles_md=partial)
     warn = warning_message(text)
     if warn:
         raise gr.Error(warn)
@@ -366,10 +374,11 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, provider, base_url,
                log=note("✅ ② 选定标题：%s\n\n⏳ ③ 生成大纲…" % state["title"]))
 
     outline = ""
-    for partial in stream_text("outline", api_key, model, 0.7, 900, title=state["title"],
+    for partial in stream_text("outline", api_key, model, 0.7, 4000, title=state["title"],
                                angle=state["angle"], audience=audience,
                                provider=provider, base_url=base_url):
         outline = partial
+        yield emit(outline=partial)
     warn = warning_message(outline)
     if warn:
         raise gr.Error(warn)
@@ -393,7 +402,7 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, provider, base_url,
                  desc="第 %d/%d 段" % (i + 1, len(sections)))
         joiner = "\n\n" if body else ""
         section_text = ""
-        for partial in stream_text("body", api_key, model, 0.7, 2000, title=state["title"],
+        for partial in stream_text("body", api_key, model, 0.7, 10000, title=state["title"],
                                    angle=state["angle"], audience=audience, outline=outline,
                                    section=section, style_block=style_block,
                                    provider=provider, base_url=base_url):
@@ -406,9 +415,10 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, provider, base_url,
                                    % len(state["body"])))
 
     summary = ""
-    for partial in stream_text("summary", api_key, model, 0.4, 200, title=state["title"],
+    for partial in stream_text("summary", api_key, model, 0.4, 1500, title=state["title"],
                                body=state["body"], provider=provider, base_url=base_url):
         summary = partial
+        yield emit(summary=partial)
     warn = warning_message(summary)
     if warn:
         raise gr.Error(warn)
@@ -451,7 +461,7 @@ def gen_topics(topic, audience, api_key, model, provider, base_url, state):
     if used:
         gr.Info("该主题已有 %d 条历史角度，已要求避开" % len(used))
     text = ""
-    for partial in stream_text("topics", api_key, model, 0.9, 800,
+    for partial in stream_text("topics", api_key, model, 0.9, 3000,
                                topic=state["topic"],
                                audience=state["audience"] or "公众号读者",
                                avoid="\n".join("- " + a for a in used) or "（无）",
@@ -475,7 +485,7 @@ def gen_titles(api_key, model, provider, base_url, state):
     if not api_key.strip():
         raise gr.Error("请先在「设置」中填写 API Key")
     text = ""
-    for partial in stream_text("titles", api_key, model, 0.95, 600,
+    for partial in stream_text("titles", api_key, model, 0.95, 3000,
                                topic=state.get("topic", ""), angle=state["angle"],
                                provider=provider, base_url=base_url):
         text = partial
@@ -498,7 +508,7 @@ def gen_outline(api_key, model, provider, base_url, state):
     if not api_key.strip():
         raise gr.Error("请先在「设置」中填写 API Key")
     text = ""
-    for partial in stream_text("outline", api_key, model, 0.7, 900,
+    for partial in stream_text("outline", api_key, model, 0.7, 4000,
                                title=state["title"], angle=state["angle"],
                                audience=state.get("audience") or "公众号读者",
                                provider=provider, base_url=base_url):
@@ -530,7 +540,7 @@ def gen_body(outline_text, api_key, model, provider, base_url, state):
         progress((i + 1) / len(sections), desc="第 %d/%d 段" % (i + 1, len(sections)))
         section_text = ""
         joiner = "\n\n" if body else ""
-        for partial in stream_text("body", api_key, model, 0.7, 2000,
+        for partial in stream_text("body", api_key, model, 0.7, 10000,
                                    title=state["title"], angle=state["angle"],
                                    audience=state.get("audience") or "公众号读者",
                                    outline=outline, section=section,
@@ -550,7 +560,7 @@ def gen_summary(api_key, model, provider, base_url, state):
     if not api_key.strip():
         raise gr.Error("请先在「设置」中填写 API Key")
     text = ""
-    for partial in stream_text("summary", api_key, model, 0.4, 200,
+    for partial in stream_text("summary", api_key, model, 0.4, 1500,
                                title=state["title"], body=state["body"],
                                provider=provider, base_url=base_url):
         text = partial

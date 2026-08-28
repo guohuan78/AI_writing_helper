@@ -186,3 +186,48 @@ def test_messages_error_mapping(monkeypatch):
         providers.messages_chat("https://x/v1", "bad-key", "m",
                                 [{"role": "user", "content": "hi"}])
     assert ei.value.code == "bad_key"
+
+
+def test_messages_chat_retries_on_thinking_only(monkeypatch):
+    """思考型模型烧光 max_tokens 只剩 thinking 块时，自动加大预算重试。"""
+    import json
+    calls = []
+
+    class FakeResp:
+        def __init__(self, payload):
+            self._payload = payload
+            self.status_code = 200
+            self.text = json.dumps(payload, ensure_ascii=False)
+        def json(self):
+            return self._payload
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append(json)
+        if len(calls) == 1:
+            return FakeResp({"stop_reason": "max_tokens",
+                             "content": [{"type": "thinking", "thinking": "思考过程"}]})
+        return FakeResp({"stop_reason": "end_turn",
+                         "content": [{"type": "thinking", "thinking": "思考过程"},
+                                     {"type": "text", "text": "最终正文"}]})
+
+    monkeypatch.setattr(providers.httpx, "post", fake_post)
+    out = providers.messages_chat("https://x/v1", "sk", "m",
+                                  [{"role": "user", "content": "hi"}], max_tokens=200)
+    assert out == "最终正文"
+    assert calls[0]["max_tokens"] == 200
+    assert calls[1]["max_tokens"] == 800
+
+
+def test_messages_chat_raises_when_still_empty(monkeypatch):
+    class FakeResp:
+        status_code = 200
+        text = "{}"
+        def json(self):
+            return {"stop_reason": "max_tokens",
+                    "content": [{"type": "thinking", "thinking": "x"}]}
+
+    monkeypatch.setattr(providers.httpx, "post", lambda *a, **k: FakeResp())
+    with pytest.raises(providers.LLMError) as ei:
+        providers.messages_chat("https://x/v1", "sk", "m",
+                                [{"role": "user", "content": "hi"}])
+    assert ei.value.code == "format"
