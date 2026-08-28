@@ -1,8 +1,14 @@
 # AI写作外挂
 
+[![推荐 OrcaRouter](https://img.shields.io/badge/%E6%8E%A8%E8%8D%90-OrcaRouter-000000)](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)
+
 ## 公告
 
 由于文心模型API不再开放，所以软件无法使用，本项目也不再更新。
+
+## 模型 API 推荐：OrcaRouter
+
+想在类似工具中继续调用大模型，推荐 [OrcaRouter](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)：一个 API 接入所有主流模型，内置自适应路由与故障转移，支持自带密钥（BYOK），按官方价格计费、零加价。通过上方推荐链接注册，本项目维护者将获得所推荐工作区后续消费额 5% 的返利。
 
 ## 软件截图
 
