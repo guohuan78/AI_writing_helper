@@ -420,10 +420,33 @@ def save_settings(api_key, model, author, output_dir, publisher_dir):
 
 cfg = load_config()
 
-with gr.Blocks(title="公众号推文创作台") as demo:
-    gr.Markdown("# AI 写作外挂 · 公众号推文创作台\n"
-                "选题 → 标题 → 大纲 → 逐段成稿 → 摘要 → 导出 Markdown，"
-                "交给 [wechat-publisher](https://github.com/guohuan78/wechat-publisher) 排版发表。")
+CUSTOM_CSS = """
+.gradio-container {max-width: 920px !important; margin: 0 auto !important;}
+footer {display: none !important;}
+#hero {margin: 10px 0 6px;}
+#hero h1 {font-size: 1.7em; font-weight: 700; margin: 0; letter-spacing: .5px;
+  background: linear-gradient(90deg, #4f46e5, #0ea5e9);
+  -webkit-background-clip: text; background-clip: text; color: transparent;}
+#hero p {color: #64748b; margin: 6px 0 0; font-size: .95em;}
+#hero a {color: #4f46e5; text-decoration: none; font-weight: 600;}
+.card {background: var(--background-fill-primary, #fff);
+  border: 1px solid var(--border-color-primary, #e2e8f0);
+  border-radius: 16px; padding: 18px 22px 20px; margin: 0 0 14px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .06);}
+.step-h h2 {margin: 0 0 10px; font-size: 1.08rem; font-weight: 700; line-height: 1.25;
+  border-left: 4px solid var(--color-accent, #6366f1); padding-left: 10px;}
+.step-note p {color: var(--body-text-color-subdued, #64748b); font-size: .9em; margin: -4px 0 10px;}
+"""
+
+STUDIO_THEME = gr.themes.Soft(
+    primary_hue="indigo", secondary_hue="sky", neutral_hue="slate",
+    font=["system-ui", "Segoe UI", "Microsoft YaHei", "PingFang SC", "sans-serif"])
+
+with gr.Blocks(title="公众号推文创作台", css=CUSTOM_CSS, theme=STUDIO_THEME) as demo:
+    gr.HTML('<div id="hero"><h1>AI 写作外挂 · 公众号推文创作台</h1>'
+            '<p>选题 → 标题 → 大纲 → 逐段成稿 → 润色 → 摘要导出 → 排版送审，一条流水线到草稿箱'
+            '　·　模型服务由 <a href="https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e" '
+            'target="_blank">OrcaRouter</a> 提供</p></div>')
     app_state = gr.State({})
 
     with gr.Accordion("设置", open=False):
@@ -450,34 +473,35 @@ with gr.Blocks(title="公众号推文创作台") as demo:
             corpus_add_btn = gr.Button("导入文章")
             corpus_stats_btn = gr.Button("刷新统计")
 
-    with gr.Group():
-        gr.Markdown("## 1 · 选题")
+    with gr.Group(elem_classes=["card"]):
+        gr.Markdown("## 1 · 选题", elem_classes=["step-h"])
         topic_box = gr.Textbox(label="主题", placeholder="今天想写什么：一个词、一件事、一条新闻都行")
         audience_box = gr.Textbox(label="目标读者与口吻（可选）", placeholder="例：刚入行的产品经理，口语一点")
         topics_btn = gr.Button("生成切入角度", variant="primary")
         topics_md = gr.Markdown()
         topics_radio = gr.Radio(label="选定一个切入角度", choices=[])
 
-    with gr.Group():
-        gr.Markdown("## 2 · 标题")
+    with gr.Group(elem_classes=["card"]):
+        gr.Markdown("## 2 · 标题", elem_classes=["step-h"])
         titles_btn = gr.Button("生成标题候选")
         titles_md = gr.Markdown()
         titles_radio = gr.Radio(label="选定标题", choices=[])
 
-    with gr.Group():
-        gr.Markdown("## 3 · 大纲")
-        gr.Markdown("生成后可以直接在文本框里修改，成稿按修改后的大纲进行。")
+    with gr.Group(elem_classes=["card"]):
+        gr.Markdown("## 3 · 大纲", elem_classes=["step-h"])
+        gr.Markdown("生成后可以直接在文本框里修改，成稿按修改后的大纲进行。", elem_classes=["step-note"])
         outline_btn = gr.Button("生成大纲")
         outline_box = gr.Textbox(label="段落级大纲", lines=6)
 
-    with gr.Group():
-        gr.Markdown("## 4 · 逐段成稿")
+    with gr.Group(elem_classes=["card"]):
+        gr.Markdown("## 4 · 逐段成稿", elem_classes=["step-h"])
         body_btn = gr.Button("按大纲逐段生成", variant="primary")
         body_md = gr.Markdown()
 
-    with gr.Group():
-        gr.Markdown("## 5 · 润色重写")
-        gr.Markdown("把要改写的文字填入下方（「填入正文」可带入成稿全文），生成 3 个版本后选一版替换正文。")
+    with gr.Group(elem_classes=["card"]):
+        gr.Markdown("## 5 · 润色重写", elem_classes=["step-h"])
+        gr.Markdown("把要改写的文字填入下方（「填入正文」可带入成稿全文），生成 3 个版本后选一版替换正文。",
+                    elem_classes=["step-note"])
         rewrite_fill_btn = gr.Button("填入正文")
         rewrite_input = gr.Textbox(label="待改写文字", lines=6)
         strength_slider = gr.Slider(1, 5, step=1, value=3, label="改写强度",
@@ -490,8 +514,8 @@ with gr.Blocks(title="公众号推文创作台") as demo:
         rewrite_choice = gr.Radio(label="采用哪个版本", choices=["版本一", "版本二", "版本三"])
         rewrite_adopt_btn = gr.Button("替换正文")
 
-    with gr.Group():
-        gr.Markdown("## 6 · 摘要与导出")
+    with gr.Group(elem_classes=["card"]):
+        gr.Markdown("## 6 · 摘要与导出", elem_classes=["step-h"])
         summary_btn = gr.Button("生成摘要")
         summary_box = gr.Textbox(label="摘要（公众号摘要栏上限 120 字，发表时粘贴使用）", lines=3)
         cover_btn = gr.Button("生成封面创意")
@@ -499,10 +523,11 @@ with gr.Blocks(title="公众号推文创作台") as demo:
         export_btn = gr.Button("导出 Markdown", variant="primary")
         export_path = gr.Textbox(label="导出位置", interactive=False)
 
-    with gr.Group():
-        gr.Markdown("## 7 · 预览与送审")
+    with gr.Group(elem_classes=["card"]):
+        gr.Markdown("## 7 · 预览与送审", elem_classes=["step-h"])
         gr.Markdown("联动 [wechat-publisher](https://github.com/guohuan78/wechat-publisher)：预览公众号排版效果，"
-                    "送审后由那边的人工审批闸门把关（pending → 人工核对 → approve → publish 扫码发表）。")
+                    "送审后由那边的人工审批闸门把关（pending → 人工核对 → approve → publish 扫码发表）。",
+                    elem_classes=["step-note"])
         preview_btn = gr.Button("排版预览")
         preview_html = gr.HTML()
         draft_btn = gr.Button("送审：存草稿待审批", variant="primary")
