@@ -14,7 +14,7 @@ import subprocess
 import gradio as gr
 
 import corpus
-from orcarouter_provider import DEFAULT_MODEL, chat, chat_stream
+from orcarouter_provider import DEFAULT_MODEL, chat, chat_stream, OrcaRouterError
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMPT_DIR = os.path.join(BASE_DIR, "prompts")
@@ -279,6 +279,136 @@ def gen_cover(api_key, model, state):
     return out.strip()
 
 
+# ---- 工作流模式 ----
+
+def switch_mode(mode):
+    """返回自动模式卡片与 7 个交互步骤卡片的显隐更新。"""
+    auto = "自动" in (mode or "")
+    return [gr.update(visible=auto)] + [gr.update(visible=not auto)] * 7
+
+
+def auto_pipeline(auto_topic, auto_audience, api_key, model, author, output_dir,
+                  progress=gr.Progress()):
+    """无人干预流水线：选题→标题→大纲→成稿→摘要→封面→导出，结果回填交互步骤。"""
+    topic = (auto_topic or "").strip()
+    if not topic:
+        raise gr.Error("请先填写主题")
+    if not api_key.strip():
+        raise gr.Error("请先在「设置」中填写 API Key")
+    audience = (auto_audience or "").strip() or "公众号读者"
+    state = {"topic": topic, "audience": audience, "angle": None, "title": None,
+             "body": None, "summary": None}
+    log_lines = []
+    blank_radio = gr.update(choices=[], value=None)
+    cur = {"log": "", "topics_md": "", "topics_radio": blank_radio, "titles_md": "",
+           "titles_radio": blank_radio, "outline": "", "body": "", "summary": "",
+           "cover": "", "path": ""}
+
+    def emit(**kw):
+        cur.update(kw)
+        return (cur["log"], cur["topics_md"], cur["topics_radio"], cur["titles_md"],
+                cur["titles_radio"], cur["outline"], cur["body"], cur["summary"],
+                cur["cover"], cur["path"], dict(state))
+
+    def note(msg):
+        log_lines.append(msg)
+        cur["log"] = "\n\n".join(log_lines)
+        return cur["log"]
+
+    yield emit(log=note("⏳ ① 生成切入角度…"))
+
+    used = corpus.past_angles(topic)
+    text = ""
+    for partial in stream_text("topics", api_key, model, 0.9, 800, topic=topic,
+                               audience=audience,
+                               avoid="\n".join("- " + a for a in used) or "（无）"):
+        text = partial
+    angles = parse_topics(text)
+    if not angles:
+        raise gr.Error("选题生成失败：" + (strip_warnings(text)[-300:] or "模型无返回"))
+    state["angle"] = angles[0]
+    progress(0.2, desc="标题")
+    yield emit(topics_md=text, topics_radio=gr.update(choices=angles, value=angles[0]),
+               log=note("✅ ① 选定角度：%s\n\n⏳ ② 生成标题候选…" % state["angle"]))
+
+    text = ""
+    for partial in stream_text("titles", api_key, model, 0.95, 600, topic=topic,
+                               angle=state["angle"]):
+        text = partial
+    pairs = parse_titles(text)
+    if not pairs:
+        raise gr.Error("标题生成失败：" + (strip_warnings(text)[-300:] or "模型无返回"))
+    state["title"] = pairs[0][1]
+    state["title_map"] = dict(pairs)
+    progress(0.35, desc="大纲")
+    yield emit(titles_md=text,
+               titles_radio=gr.update(choices=[d for d, _ in pairs],
+                                      value=[d for d, _ in pairs][0]),
+               log=note("✅ ② 选定标题：%s\n\n⏳ ③ 生成大纲…" % state["title"]))
+
+    outline = ""
+    for partial in stream_text("outline", api_key, model, 0.7, 900, title=state["title"],
+                               angle=state["angle"], audience=audience):
+        outline = partial
+    state["outline"] = outline
+    sections = parse_sections(outline)
+    hits = corpus.search_articles(topic + "\n" + outline, k=2)
+    if hits:
+        style_block = "文风参考（只模仿语气与节奏，不引用其中内容）：\n" + "\n---\n".join(
+            "《%s》：%s" % (h["title"], h["body"][:400].replace("\n", " ")) for h in hits)
+    else:
+        style_block = "（语料库暂无参考文章，按自然的风格写。）"
+    progress(0.45, desc="逐段成稿")
+    yield emit(outline=outline,
+               log=note("✅ ③ 大纲完成，共 %d 段\n\n⏳ ④ 逐段成稿（%s）…" % (
+                   len(sections),
+                   "命中 %d 篇文风参考" % len(hits) if hits else "语料库暂无参考")))
+
+    body = ""
+    for i, section in enumerate(sections):
+        progress(0.45 + 0.35 * (i + 1) / max(len(sections), 1),
+                 desc="第 %d/%d 段" % (i + 1, len(sections)))
+        joiner = "\n\n" if body else ""
+        section_text = ""
+        for partial in stream_text("body", api_key, model, 0.7, 2000, title=state["title"],
+                                   angle=state["angle"], audience=audience, outline=outline,
+                                   section=section, style_block=style_block):
+            section_text = partial
+            yield emit(body=joiner + partial)
+        body += joiner + section_text
+    state["body"] = strip_warnings(body)
+    progress(0.85, desc="摘要与封面")
+    yield emit(body=body, log=note("✅ ④ 成稿完成（%d 字）\n\n⏳ ⑤ 生成摘要与封面创意…"
+                                   % len(state["body"])))
+
+    summary = ""
+    for partial in stream_text("summary", api_key, model, 0.4, 200, title=state["title"],
+                               body=state["body"]):
+        summary = partial
+    state["summary"] = summary
+    system, user_template = load_prompt("cover")
+    try:
+        cover = chat([{"role": "system", "content": system},
+                      {"role": "user", "content": user_template.format(
+                          title=state["title"], digest=state["body"][:300])}],
+                     api_key, model=model, max_tokens=400, temperature=0.9).strip()
+    except OrcaRouterError as e:
+        cover = "封面创意生成失败：" + str(e)
+
+    path = export_article(state["title"], author, state["body"], output_dir)
+    corpus.add_article(state["title"], state["body"])
+    corpus.record_topic(topic, state["angle"], state["title"])
+    saved = load_config()
+    saved["author"] = author.strip()
+    saved["output_dir"] = output_dir.strip()
+    save_config(saved)
+    progress(1.0, desc="完成")
+    yield emit(summary=summary, cover=cover, path=path,
+               log=note("✅ ⑤ 摘要与封面完成\n\n✅ ⑥ 已导出：%s\n\n"
+                        "🎉 全流程结束。切回「交互模式」可对任一环节微调后重新导出。" % path))
+    gr.Info("自动成稿完成：" + path)
+
+
 # ---- 界面事件 ----
 
 def gen_topics(topic, audience, api_key, model, state):
@@ -442,12 +572,25 @@ STUDIO_THEME = gr.themes.Soft(
     primary_hue="indigo", secondary_hue="sky", neutral_hue="slate",
     font=["system-ui", "Segoe UI", "Microsoft YaHei", "PingFang SC", "sans-serif"])
 
-with gr.Blocks(title="公众号推文创作台", css=CUSTOM_CSS, theme=STUDIO_THEME) as demo:
+with gr.Blocks(title="公众号推文创作台") as demo:
     gr.HTML('<div id="hero"><h1>AI 写作外挂 · 公众号推文创作台</h1>'
             '<p>选题 → 标题 → 大纲 → 逐段成稿 → 润色 → 摘要导出 → 排版送审，一条流水线到草稿箱'
             '　·　模型服务由 <a href="https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e" '
             'target="_blank">OrcaRouter</a> 提供</p></div>')
     app_state = gr.State({})
+
+    mode_radio = gr.Radio(choices=["🖐 交互模式（逐步选择）", "🤖 自动模式（一键成稿）"],
+                          value="🖐 交互模式（逐步选择）", label="工作模式",
+                          info="自动模式：角度与标题取第一候选，一键跑到导出；交互模式：每一步自己选。")
+
+    with gr.Group(elem_classes=["card"], visible=False) as auto_card:
+        gr.Markdown("## 🤖 自动模式", elem_classes=["step-h"])
+        gr.Markdown("填主题后一键跑完整条流水线，日志实时显示进度；完成后切回「交互模式」，"
+                    "所有结果已回填到各步骤，可继续手动微调。", elem_classes=["step-note"])
+        auto_topic = gr.Textbox(label="主题", placeholder="今天想写什么：一个词、一件事、一条新闻都行")
+        auto_audience = gr.Textbox(label="目标读者与口吻（可选）", placeholder="例：刚入行的产品经理，口语一点")
+        auto_btn = gr.Button("🚀 一键成稿", variant="primary")
+        auto_log = gr.Markdown()
 
     with gr.Accordion("设置", open=False):
         key_box = gr.Textbox(label="OrcaRouter API Key", type="password", value=cfg["api_key"],
@@ -473,7 +616,7 @@ with gr.Blocks(title="公众号推文创作台", css=CUSTOM_CSS, theme=STUDIO_TH
             corpus_add_btn = gr.Button("导入文章")
             corpus_stats_btn = gr.Button("刷新统计")
 
-    with gr.Group(elem_classes=["card"]):
+    with gr.Group(elem_classes=["card"]) as card1:
         gr.Markdown("## 1 · 选题", elem_classes=["step-h"])
         topic_box = gr.Textbox(label="主题", placeholder="今天想写什么：一个词、一件事、一条新闻都行")
         audience_box = gr.Textbox(label="目标读者与口吻（可选）", placeholder="例：刚入行的产品经理，口语一点")
@@ -481,24 +624,24 @@ with gr.Blocks(title="公众号推文创作台", css=CUSTOM_CSS, theme=STUDIO_TH
         topics_md = gr.Markdown()
         topics_radio = gr.Radio(label="选定一个切入角度", choices=[])
 
-    with gr.Group(elem_classes=["card"]):
+    with gr.Group(elem_classes=["card"]) as card2:
         gr.Markdown("## 2 · 标题", elem_classes=["step-h"])
         titles_btn = gr.Button("生成标题候选")
         titles_md = gr.Markdown()
         titles_radio = gr.Radio(label="选定标题", choices=[])
 
-    with gr.Group(elem_classes=["card"]):
+    with gr.Group(elem_classes=["card"]) as card3:
         gr.Markdown("## 3 · 大纲", elem_classes=["step-h"])
         gr.Markdown("生成后可以直接在文本框里修改，成稿按修改后的大纲进行。", elem_classes=["step-note"])
         outline_btn = gr.Button("生成大纲")
         outline_box = gr.Textbox(label="段落级大纲", lines=6)
 
-    with gr.Group(elem_classes=["card"]):
+    with gr.Group(elem_classes=["card"]) as card4:
         gr.Markdown("## 4 · 逐段成稿", elem_classes=["step-h"])
         body_btn = gr.Button("按大纲逐段生成", variant="primary")
         body_md = gr.Markdown()
 
-    with gr.Group(elem_classes=["card"]):
+    with gr.Group(elem_classes=["card"]) as card5:
         gr.Markdown("## 5 · 润色重写", elem_classes=["step-h"])
         gr.Markdown("把要改写的文字填入下方（「填入正文」可带入成稿全文），生成 3 个版本后选一版替换正文。",
                     elem_classes=["step-note"])
@@ -514,7 +657,7 @@ with gr.Blocks(title="公众号推文创作台", css=CUSTOM_CSS, theme=STUDIO_TH
         rewrite_choice = gr.Radio(label="采用哪个版本", choices=["版本一", "版本二", "版本三"])
         rewrite_adopt_btn = gr.Button("替换正文")
 
-    with gr.Group(elem_classes=["card"]):
+    with gr.Group(elem_classes=["card"]) as card6:
         gr.Markdown("## 6 · 摘要与导出", elem_classes=["step-h"])
         summary_btn = gr.Button("生成摘要")
         summary_box = gr.Textbox(label="摘要（公众号摘要栏上限 120 字，发表时粘贴使用）", lines=3)
@@ -523,7 +666,7 @@ with gr.Blocks(title="公众号推文创作台", css=CUSTOM_CSS, theme=STUDIO_TH
         export_btn = gr.Button("导出 Markdown", variant="primary")
         export_path = gr.Textbox(label="导出位置", interactive=False)
 
-    with gr.Group(elem_classes=["card"]):
+    with gr.Group(elem_classes=["card"]) as card7:
         gr.Markdown("## 7 · 预览与送审", elem_classes=["step-h"])
         gr.Markdown("联动 [wechat-publisher](https://github.com/guohuan78/wechat-publisher)：预览公众号排版效果，"
                     "送审后由那边的人工审批闸门把关（pending → 人工核对 → approve → publish 扫码发表）。",
@@ -558,6 +701,12 @@ with gr.Blocks(title="公众号推文创作台", css=CUSTOM_CSS, theme=STUDIO_TH
     rewrite_adopt_btn.click(adopt_version, [rewrite_v1, rewrite_v2, rewrite_v3, rewrite_choice, app_state],
                             [body_md, app_state])
     cover_btn.click(gen_cover, [key_box, model_box, app_state], [cover_box])
+    mode_radio.change(switch_mode, [mode_radio],
+                      [auto_card, card1, card2, card3, card4, card5, card6, card7])
+    auto_btn.click(auto_pipeline,
+                   [auto_topic, auto_audience, key_box, model_box, author_box, outdir_box],
+                   [auto_log, topics_md, topics_radio, titles_md, titles_radio,
+                    outline_box, body_md, summary_box, cover_box, export_path, app_state])
 
 if __name__ == "__main__":
-    demo.launch(inbrowser=True)
+    demo.launch(inbrowser=True, css=CUSTOM_CSS, theme=STUDIO_THEME)
