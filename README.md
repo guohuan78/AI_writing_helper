@@ -26,11 +26,23 @@
 
 `corpus.db`（SQLite，本地文件）存两类数据：已发表文章与选题历史。成稿时按字符 bigram 相关度检索最相关的两篇，以「文风参考（只模仿语气与节奏，不引用内容）」注入正文提示词，让文字更像你写的；再次生成选题时，同一主题下已用过的角度会注入「避开」清单。「语料库」折叠区可手动导入过往文章，导出 Markdown 的文章自动入库。
 
-## 模型服务：OrcaRouter
+## 模型服务：多供应商
 
-Powered by [OrcaRouter](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)——本软件由 OrcaRouter 提供模型服务，通过官方 OpenAI SDK 指向 OrcaRouter 的 OpenAI 兼容接口调用大模型：一个 API 接入所有主流模型，内置自适应路由与故障转移，支持自带密钥（BYOK），按官方价格计费、零加价。通过推荐链接注册，本项目维护者将获得所推荐工作区后续消费额 5% 的返利。
+模型调用统一走 OpenAI 兼容协议（官方 OpenAI SDK），「设置」里切换供应商即可，每个供应商的 Key 独立保存（`config.json` 的 `api_keys`），切换时自动载入对应 Key、官方地址与默认模型：
 
-项目内的接入代码见 `orcarouter_provider.py`，核心写法：
+| 供应商 | API 地址 | 默认模型 | Key 创建 |
+|---|---|---|---|
+| OrcaRouter | `https://api.orcarouter.ai/v1` | `orcarouter/auto`（自动选型） | [orcarouter.ai/console](https://www.orcarouter.ai/console) |
+| StepFun 阶跃星辰 | `https://api.stepfun.com/v1` | `step-2-16k` | [platform.stepfun.com](https://platform.stepfun.com) |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` | [open.bigmodel.cn](https://open.bigmodel.cn) |
+| Kimi 月之暗面 | `https://api.moonshot.cn/v1` | `kimi-k2-0905-preview` | [platform.kimi.ai](https://platform.kimi.ai) |
+| 自定义 | 任意 OpenAI 兼容地址 | 自填 | — |
+
+模型名以各平台模型列表为准，输入框可直接改名；默认模型也可在 `providers.py` 的 `PROVIDERS` 注册表中调整。
+
+Powered by [OrcaRouter](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)——推荐用 OrcaRouter：一个 Key 即可调用 GLM、Kimi、Qwen、DeepSeek 等全部模型，内置自适应路由与故障转移，按官方价格计费、零加价。通过推荐链接注册，本项目维护者将获得所推荐工作区后续消费额 5% 的返利。
+
+项目内的接入代码见 `providers.py`（多供应商）与 `orcarouter_provider.py`（OrcaRouter 专项），核心写法：
 
 ```python
 from openai import OpenAI
@@ -52,8 +64,8 @@ python article_studio.py
 
 浏览器自动打开创作台。首次使用：
 
-1. 点击[推荐链接](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)注册 OrcaRouter，在[控制台](https://www.orcarouter.ai/console)创建 API Key（`sk-orca-` 开头）。
-2. 展开页面顶部「设置」，填入 API Key，可按需修改模型（默认 `orcarouter/auto`）与作者名，点击「保存设置」。设置明文保存在本目录 `config.json`，谨防泄露。
+1. 「设置」里选择模型供应商（推荐[OrcaRouter](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)：一个 Key 用全部模型），到对应平台创建 API Key。
+2. 粘贴 Key，按需修改模型与作者名，点击「保存设置」。每个供应商的 Key 分开保存在 `config.json`，谨防泄露。
 
 Prompt 模板外置在 `prompts/` 目录（选题/标题/大纲/正文/摘要各一个 JSON），改模板即可调整各环节的生成风格。
 

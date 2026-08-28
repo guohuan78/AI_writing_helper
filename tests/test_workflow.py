@@ -23,6 +23,8 @@ def test_switch_mode_toggles_visibility():
 
 def test_auto_pipeline_input_validations():
     with pytest.raises(gr.Error):
-        next(studio.auto_pipeline("   ", "", "sk-orca-x", "orcarouter/auto", "", "articles"))
+        next(studio.auto_pipeline("   ", "", "sk-orca-x", "orcarouter/auto",
+                                  "orcarouter", "", "", "articles"))
     with pytest.raises(gr.Error):
-        next(studio.auto_pipeline("主题", "", "", "orcarouter/auto", "", "articles"))
+        next(studio.auto_pipeline("主题", "", "", "orcarouter/auto",
+                                  "orcarouter", "", "", "articles"))

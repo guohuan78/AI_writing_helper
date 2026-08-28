@@ -14,7 +14,7 @@ import subprocess
 import gradio as gr
 
 import corpus
-from orcarouter_provider import DEFAULT_MODEL, chat, chat_stream, OrcaRouterError
+from providers import PROVIDERS, LLMError, chat, chat_stream, resolve_base_url
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMPT_DIR = os.path.join(BASE_DIR, "prompts")
@@ -23,8 +23,8 @@ REF_URL = "https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e"
 PREVIEW_HTML = os.path.join(BASE_DIR, "preview.html")
 
 _DETECTED_PUBLISHER = "D:/coding/wechat-publisher" if os.path.isdir("D:/coding/wechat-publisher") else ""
-DEFAULT_CONFIG = {"api_key": "", "model": DEFAULT_MODEL, "author": "", "output_dir": "articles",
-                  "publisher_dir": _DETECTED_PUBLISHER}
+DEFAULT_CONFIG = {"api_keys": {}, "provider": "orcarouter", "base_url": "", "model": "",
+                  "author": "", "output_dir": "articles", "publisher_dir": _DETECTED_PUBLISHER}
 
 
 def load_config():
@@ -34,6 +34,8 @@ def load_config():
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
             merged.update({k: cfg.get(k, v) for k, v in DEFAULT_CONFIG.items()})
+            if cfg.get("api_key") and not merged.get("api_keys"):
+                merged["api_keys"] = {"orcarouter": cfg["api_key"]}
         except (OSError, ValueError):
             pass
     return merged
@@ -50,15 +52,17 @@ def load_prompt(name):
     return tpl["system"], tpl["user_template"]
 
 
-def stream_text(prompt_name, api_key, model, temperature, max_tokens=2048, **variables):
+def stream_text(prompt_name, api_key, model, temperature, max_tokens=2048,
+                provider="orcarouter", base_url="", **variables):
     """按模板流式生成，yield 已累积文本；出错时把错误信息附在尾部后停止。"""
     system, user_template = load_prompt(prompt_name)
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": user_template.format(**variables)}]
     text = ""
     try:
-        for chunk in chat_stream(messages, api_key, model=model,
-                                 max_tokens=max_tokens, temperature=temperature):
+        for chunk in chat_stream(messages, api_key, model=model, provider=provider,
+                                 base_url=base_url, max_tokens=max_tokens,
+                                 temperature=temperature):
             text += chunk
             yield text
     except OrcaRouterError as e:
@@ -234,7 +238,7 @@ def fill_rewrite(state):
     return state["body"]
 
 
-def gen_rewrites(rewrite_text, strength, api_key, model):
+def gen_rewrites(rewrite_text, strength, api_key, model, provider, base_url):
     if not rewrite_text.strip():
         raise gr.Error("请先在第 4 步生成正文，或直接把要改写的文字填入输入框")
     if not api_key.strip():
@@ -246,9 +250,10 @@ def gen_rewrites(rewrite_text, strength, api_key, model):
     versions = []
     try:
         for _ in range(3):
-            out = chat(messages, api_key, model=model, max_tokens=1500, temperature=0.85)
+            out = chat(messages, api_key, model=model, provider=provider,
+                       base_url=base_url, max_tokens=1500, temperature=0.85)
             versions.append(out.strip())
-    except OrcaRouterError as e:
+    except LLMError as e:
         raise gr.Error("调用失败：" + str(e))
     return versions[0], versions[1], versions[2]
 
@@ -263,7 +268,7 @@ def adopt_version(v1, v2, v3, choice, state):
     return state["body"], state
 
 
-def gen_cover(api_key, model, state):
+def gen_cover(api_key, model, provider, base_url, state):
     if not state.get("body"):
         raise gr.Error("请先生成正文")
     if not api_key.strip():
@@ -273,8 +278,9 @@ def gen_cover(api_key, model, state):
                 {"role": "user", "content": user_template.format(
                     title=state["title"], digest=state["body"][:300])}]
     try:
-        out = chat(messages, api_key, model=model, max_tokens=400, temperature=0.9)
-    except OrcaRouterError as e:
+        out = chat(messages, api_key, model=model, provider=provider,
+                   base_url=base_url, max_tokens=400, temperature=0.9)
+    except LLMError as e:
         raise gr.Error("调用失败：" + str(e))
     return out.strip()
 
@@ -287,8 +293,8 @@ def switch_mode(mode):
     return [gr.update(visible=auto)] + [gr.update(visible=not auto)] * 7
 
 
-def auto_pipeline(auto_topic, auto_audience, api_key, model, author, output_dir,
-                  progress=gr.Progress()):
+def auto_pipeline(auto_topic, auto_audience, api_key, model, provider, base_url,
+                  author, output_dir, progress=gr.Progress()):
     """无人干预流水线：选题→标题→大纲→成稿→摘要→封面→导出，结果回填交互步骤。"""
     topic = (auto_topic or "").strip()
     if not topic:
@@ -321,7 +327,8 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, author, output_dir,
     text = ""
     for partial in stream_text("topics", api_key, model, 0.9, 800, topic=topic,
                                audience=audience,
-                               avoid="\n".join("- " + a for a in used) or "（无）"):
+                               avoid="\n".join("- " + a for a in used) or "（无）",
+                               provider=provider, base_url=base_url):
         text = partial
     angles = parse_topics(text)
     if not angles:
@@ -333,7 +340,7 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, author, output_dir,
 
     text = ""
     for partial in stream_text("titles", api_key, model, 0.95, 600, topic=topic,
-                               angle=state["angle"]):
+                               angle=state["angle"], provider=provider, base_url=base_url):
         text = partial
     pairs = parse_titles(text)
     if not pairs:
@@ -348,7 +355,8 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, author, output_dir,
 
     outline = ""
     for partial in stream_text("outline", api_key, model, 0.7, 900, title=state["title"],
-                               angle=state["angle"], audience=audience):
+                               angle=state["angle"], audience=audience,
+                               provider=provider, base_url=base_url):
         outline = partial
     state["outline"] = outline
     sections = parse_sections(outline)
@@ -372,7 +380,8 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, author, output_dir,
         section_text = ""
         for partial in stream_text("body", api_key, model, 0.7, 2000, title=state["title"],
                                    angle=state["angle"], audience=audience, outline=outline,
-                                   section=section, style_block=style_block):
+                                   section=section, style_block=style_block,
+                                   provider=provider, base_url=base_url):
             section_text = partial
             yield emit(body=joiner + partial)
         body += joiner + section_text
@@ -383,7 +392,7 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, author, output_dir,
 
     summary = ""
     for partial in stream_text("summary", api_key, model, 0.4, 200, title=state["title"],
-                               body=state["body"]):
+                               body=state["body"], provider=provider, base_url=base_url):
         summary = partial
     state["summary"] = summary
     system, user_template = load_prompt("cover")
@@ -391,8 +400,9 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, author, output_dir,
         cover = chat([{"role": "system", "content": system},
                       {"role": "user", "content": user_template.format(
                           title=state["title"], digest=state["body"][:300])}],
-                     api_key, model=model, max_tokens=400, temperature=0.9).strip()
-    except OrcaRouterError as e:
+                     api_key, model=model, provider=provider, base_url=base_url,
+                     max_tokens=400, temperature=0.9).strip()
+    except LLMError as e:
         cover = "封面创意生成失败：" + str(e)
 
     path = export_article(state["title"], author, state["body"], output_dir)
@@ -411,7 +421,7 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, author, output_dir,
 
 # ---- 界面事件 ----
 
-def gen_topics(topic, audience, api_key, model, state):
+def gen_topics(topic, audience, api_key, model, provider, base_url, state):
     if not topic.strip():
         raise gr.Error("请先填写主题")
     if not api_key.strip():
@@ -426,7 +436,8 @@ def gen_topics(topic, audience, api_key, model, state):
     for partial in stream_text("topics", api_key, model, 0.9, 800,
                                topic=state["topic"],
                                audience=state["audience"] or "公众号读者",
-                               avoid="\n".join("- " + a for a in used) or "（无）"):
+                               avoid="\n".join("- " + a for a in used) or "（无）",
+                               provider=provider, base_url=base_url):
         text = partial
         yield partial, gr.update(choices=[], value=None), state
     state["topics_raw"] = text
@@ -439,7 +450,7 @@ def select_angle(angle, state):
     return state
 
 
-def gen_titles(api_key, model, state):
+def gen_titles(api_key, model, provider, base_url, state):
     state = dict(state)
     if not state.get("angle"):
         raise gr.Error("请先在第一步选择一个切入角度")
@@ -447,7 +458,8 @@ def gen_titles(api_key, model, state):
         raise gr.Error("请先在「设置」中填写 API Key")
     text = ""
     for partial in stream_text("titles", api_key, model, 0.95, 600,
-                               topic=state.get("topic", ""), angle=state["angle"]):
+                               topic=state.get("topic", ""), angle=state["angle"],
+                               provider=provider, base_url=base_url):
         text = partial
         yield partial, gr.update(choices=[], value=None), state
     pairs = parse_titles(text)
@@ -461,7 +473,7 @@ def select_title(display, state):
     return state
 
 
-def gen_outline(api_key, model, state):
+def gen_outline(api_key, model, provider, base_url, state):
     state = dict(state)
     if not state.get("title"):
         raise gr.Error("请先在第二步选定标题")
@@ -470,13 +482,14 @@ def gen_outline(api_key, model, state):
     text = ""
     for partial in stream_text("outline", api_key, model, 0.7, 900,
                                title=state["title"], angle=state["angle"],
-                               audience=state.get("audience") or "公众号读者"):
+                               audience=state.get("audience") or "公众号读者",
+                               provider=provider, base_url=base_url):
         text = partial
         yield partial, state
     yield text, state
 
 
-def gen_body(outline_text, api_key, model, state):
+def gen_body(outline_text, api_key, model, provider, base_url, state):
     state = dict(state)
     if not state.get("title"):
         raise gr.Error("请先完成标题选择")
@@ -503,7 +516,8 @@ def gen_body(outline_text, api_key, model, state):
                                    title=state["title"], angle=state["angle"],
                                    audience=state.get("audience") or "公众号读者",
                                    outline=outline, section=section,
-                                   style_block=style_block):
+                                   style_block=style_block,
+                                   provider=provider, base_url=base_url):
             section_text = partial
             yield joiner + partial, state
         body += joiner + section_text
@@ -511,7 +525,7 @@ def gen_body(outline_text, api_key, model, state):
     yield body, state
 
 
-def gen_summary(api_key, model, state):
+def gen_summary(api_key, model, provider, base_url, state):
     state = dict(state)
     if not state.get("body"):
         raise gr.Error("请先生成正文")
@@ -519,7 +533,8 @@ def gen_summary(api_key, model, state):
         raise gr.Error("请先在「设置」中填写 API Key")
     text = ""
     for partial in stream_text("summary", api_key, model, 0.4, 200,
-                               title=state["title"], body=state["body"]):
+                               title=state["title"], body=state["body"],
+                               provider=provider, base_url=base_url):
         text = partial
         yield partial, state
     state["summary"] = text
@@ -541,11 +556,26 @@ def do_export(author, output_dir, state):
     return path, state
 
 
-def save_settings(api_key, model, author, output_dir, publisher_dir):
-    save_config({"api_key": api_key.strip(), "model": model.strip(),
-                 "author": author.strip(), "output_dir": output_dir.strip(),
-                 "publisher_dir": publisher_dir.strip()})
-    gr.Info("设置已保存到 config.json")
+def on_provider_change(provider_key):
+    """切换供应商：载入该供应商已保存的 Key，带出官方地址与默认模型。"""
+    info = PROVIDERS.get(provider_key, {})
+    saved_key = load_config().get("api_keys", {}).get(provider_key, "")
+    if info.get("console"):
+        console = "在 [%s](%s) 创建 Key" % (info["console_name"], info["console"])
+    else:
+        console = "填入任意 OpenAI 兼容服务的地址与对应 Key"
+    return saved_key, info.get("default_model", ""), info.get("base_url", ""), console
+
+
+def save_settings(provider, base_url, api_key, model, author, output_dir, publisher_dir):
+    cfg = load_config()
+    keys = dict(cfg.get("api_keys") or {})
+    keys[provider] = api_key.strip()
+    cfg.update({"provider": provider, "base_url": base_url.strip(), "model": model.strip(),
+                "api_keys": keys, "author": author.strip(),
+                "output_dir": output_dir.strip(), "publisher_dir": publisher_dir.strip()})
+    save_config(cfg)
+    gr.Info("设置已保存：%s 的 Key 已单独保存" % PROVIDERS.get(provider, {}).get("label", provider))
 
 
 cfg = load_config()
@@ -575,8 +605,8 @@ STUDIO_THEME = gr.themes.Soft(
 with gr.Blocks(title="公众号推文创作台") as demo:
     gr.HTML('<div id="hero"><h1>AI 写作外挂 · 公众号推文创作台</h1>'
             '<p>选题 → 标题 → 大纲 → 逐段成稿 → 润色 → 摘要导出 → 排版送审，一条流水线到草稿箱'
-            '　·　模型服务由 <a href="https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e" '
-            'target="_blank">OrcaRouter</a> 提供</p></div>')
+            '　·　模型服务 <a href="https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e" '
+            'target="_blank">OrcaRouter</a> / StepFun / GLM / Kimi（OpenAI 兼容，设置里切换）</p></div>')
     app_state = gr.State({})
 
     mode_radio = gr.Radio(choices=["🖐 交互模式（逐步选择）", "🤖 自动模式（一键成稿）"],
@@ -593,10 +623,25 @@ with gr.Blocks(title="公众号推文创作台") as demo:
         auto_log = gr.Markdown()
 
     with gr.Accordion("设置", open=False):
-        key_box = gr.Textbox(label="OrcaRouter API Key", type="password", value=cfg["api_key"],
-                             info="sk-orca- 开头，获取地址：" + REF_URL + "；明文保存在本目录 config.json，谨防泄露")
-        model_box = gr.Textbox(label="模型", value=cfg["model"],
-                               info="默认 orcarouter/auto（按任务难度自动选型），也可填 qwen/qwen3-max、z-ai/glm-5 等")
+        provider_box = gr.Dropdown(choices=[(info["label"], key) for key, info in PROVIDERS.items()],
+                                   value=cfg.get("provider", "orcarouter"), label="模型供应商",
+                                   info="OrcaRouter 一个 Key 即可调用 GLM、Kimi、Qwen 等全部模型，也可直连各供应商官方接口")
+        baseurl_box = gr.Textbox(
+            label="API 地址（OpenAI 兼容）",
+            value=cfg.get("base_url") or PROVIDERS.get(cfg.get("provider", "orcarouter"), {}).get("base_url", ""),
+            info="切换供应商时自动填入官方地址，可修改")
+        key_box = gr.Textbox(label="API Key（当前供应商）", type="password",
+                             value=cfg.get("api_keys", {}).get(cfg.get("provider", "orcarouter"), ""),
+                             info="每个供应商的 Key 分开保存在 config.json 的 api_keys 中，明文谨防泄露")
+        _provider_info = PROVIDERS.get(cfg.get("provider", "orcarouter"), {})
+        console_md = gr.Markdown(
+            ("在 [%s](%s) 创建 Key" % (_provider_info["console_name"], _provider_info["console"]))
+            if _provider_info.get("console") else "填入任意 OpenAI 兼容服务的地址与对应 Key",
+            elem_classes=["step-note"])
+        model_box = gr.Textbox(
+            label="模型",
+            value=cfg.get("model") or _provider_info.get("default_model", ""),
+            info="以所选平台的模型列表为准，可直接改名")
         author_box = gr.Textbox(label="作者名（可选）", value=cfg["author"],
                                 info="写入文章 front matter 的 author 字段")
         outdir_box = gr.Textbox(label="导出目录", value=cfg["output_dir"],
@@ -678,17 +723,24 @@ with gr.Blocks(title="公众号推文创作台") as demo:
         status_btn = gr.Button("刷新发表状态")
         status_md = gr.Markdown()
 
-    topics_btn.click(gen_topics, [topic_box, audience_box, key_box, model_box, app_state],
+    topics_btn.click(gen_topics, [topic_box, audience_box, key_box, model_box,
+                                  provider_box, baseurl_box, app_state],
                      [topics_md, topics_radio, app_state])
     topics_radio.change(select_angle, [topics_radio, app_state], [app_state])
-    titles_btn.click(gen_titles, [key_box, model_box, app_state],
+    titles_btn.click(gen_titles, [key_box, model_box, provider_box, baseurl_box, app_state],
                      [titles_md, titles_radio, app_state])
     titles_radio.change(select_title, [titles_radio, app_state], [app_state])
-    outline_btn.click(gen_outline, [key_box, model_box, app_state], [outline_box, app_state])
-    body_btn.click(gen_body, [outline_box, key_box, model_box, app_state], [body_md, app_state])
-    summary_btn.click(gen_summary, [key_box, model_box, app_state], [summary_box, app_state])
+    outline_btn.click(gen_outline, [key_box, model_box, provider_box, baseurl_box, app_state],
+                      [outline_box, app_state])
+    body_btn.click(gen_body, [outline_box, key_box, model_box, provider_box, baseurl_box, app_state],
+                   [body_md, app_state])
+    summary_btn.click(gen_summary, [key_box, model_box, provider_box, baseurl_box, app_state],
+                      [summary_box, app_state])
     export_btn.click(do_export, [author_box, outdir_box, app_state], [export_path, app_state])
-    save_btn.click(save_settings, [key_box, model_box, author_box, outdir_box, pubdir_box], None)
+    save_btn.click(save_settings, [provider_box, baseurl_box, key_box, model_box,
+                                   author_box, outdir_box, pubdir_box], None)
+    provider_box.change(on_provider_change, [provider_box],
+                        [key_box, model_box, baseurl_box, console_md])
     preview_btn.click(render_preview, [pubdir_box, app_state], [preview_html])
     draft_btn.click(send_draft, [pubdir_box, app_state], [draft_md, app_state])
     status_btn.click(refresh_status, [pubdir_box], [status_md])
@@ -696,15 +748,18 @@ with gr.Blocks(title="公众号推文创作台") as demo:
                          [corpus_stats, corpus_text, corpus_title])
     corpus_stats_btn.click(lambda: corpus_stats_text(), None, [corpus_stats])
     rewrite_fill_btn.click(fill_rewrite, [app_state], [rewrite_input])
-    rewrite_btn.click(gen_rewrites, [rewrite_input, strength_slider, key_box, model_box],
+    rewrite_btn.click(gen_rewrites, [rewrite_input, strength_slider, key_box, model_box,
+                                     provider_box, baseurl_box],
                       [rewrite_v1, rewrite_v2, rewrite_v3])
     rewrite_adopt_btn.click(adopt_version, [rewrite_v1, rewrite_v2, rewrite_v3, rewrite_choice, app_state],
                             [body_md, app_state])
-    cover_btn.click(gen_cover, [key_box, model_box, app_state], [cover_box])
+    cover_btn.click(gen_cover, [key_box, model_box, provider_box, baseurl_box, app_state],
+                    [cover_box])
     mode_radio.change(switch_mode, [mode_radio],
                       [auto_card, card1, card2, card3, card4, card5, card6, card7])
     auto_btn.click(auto_pipeline,
-                   [auto_topic, auto_audience, key_box, model_box, author_box, outdir_box],
+                   [auto_topic, auto_audience, key_box, model_box, provider_box, baseurl_box,
+                    author_box, outdir_box],
                    [auto_log, topics_md, topics_radio, titles_md, titles_radio,
                     outline_box, body_md, summary_box, cover_box, export_path, app_state])
 
