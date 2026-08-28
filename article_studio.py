@@ -8,6 +8,8 @@ import datetime
 import json
 import os
 import re
+import shutil
+import subprocess
 
 import gradio as gr
 
@@ -17,8 +19,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMPT_DIR = os.path.join(BASE_DIR, "prompts")
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 REF_URL = "https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e"
+PREVIEW_HTML = os.path.join(BASE_DIR, "preview.html")
 
-DEFAULT_CONFIG = {"api_key": "", "model": DEFAULT_MODEL, "author": "", "output_dir": "articles"}
+_DETECTED_PUBLISHER = "D:/coding/wechat-publisher" if os.path.isdir("D:/coding/wechat-publisher") else ""
+DEFAULT_CONFIG = {"api_key": "", "model": DEFAULT_MODEL, "author": "", "output_dir": "articles",
+                  "publisher_dir": _DETECTED_PUBLISHER}
 
 
 def load_config():
@@ -122,6 +127,89 @@ def export_article(title, author, body, output_dir):
     with open(path, "w", encoding="utf-8") as f:
         f.write(article)
     return path
+
+
+# ---- wechat-publisher 联动 ----
+
+class PublisherError(Exception):
+    pass
+
+
+def run_publisher(args, publisher_dir, timeout=120):
+    """在 wechat-publisher 项目目录运行 CLI，返回 CompletedProcess。"""
+    cwd = (publisher_dir or "").strip()
+    if not cwd:
+        raise PublisherError("未配置 wechat-publisher 项目路径，请在「设置」中填写")
+    if not os.path.isfile(os.path.join(cwd, "src", "cli.js")):
+        raise PublisherError("目录下没找到 src/cli.js，请确认填写的是 wechat-publisher 项目路径")
+    node = shutil.which("node")
+    if not node:
+        raise PublisherError("未找到 node，请先安装 Node.js 并加入 PATH")
+    try:
+        return subprocess.run([node, "src/cli.js"] + args, cwd=cwd, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise PublisherError("命令超时（%d 秒）：%s" % (timeout, " ".join(args)))
+
+
+def parse_draft_output(stdout):
+    """从 draft 命令输出解析 (kind, id)：kind 为 new / duplicate / None。"""
+    m = re.search(r"ID:\s*([0-9a-f]{8})", stdout)
+    if m:
+        return "new", m.group(1)
+    m = re.search(r"已有记录 \[([0-9a-f]{8})\]", stdout)
+    if m:
+        return "duplicate", m.group(1)
+    return None, None
+
+
+def render_preview(publisher_dir, state):
+    state = dict(state)
+    if not state.get("export_path"):
+        raise gr.Error("请先在第 5 步导出 Markdown")
+    try:
+        proc = run_publisher(["render", state["export_path"], "-o", PREVIEW_HTML], publisher_dir, 60)
+    except PublisherError as e:
+        raise gr.Error(str(e))
+    if proc.returncode != 0:
+        raise gr.Error("渲染失败：" + (proc.stderr.strip() or proc.stdout.strip())[-300:])
+    with open(PREVIEW_HTML, "r", encoding="utf-8") as f:
+        html = f.read()
+    gr.Info("排版预览已生成")
+    return html
+
+
+def send_draft(publisher_dir, state):
+    state = dict(state)
+    if not state.get("export_path"):
+        raise gr.Error("请先在第 5 步导出 Markdown")
+    try:
+        proc = run_publisher(["draft", state["export_path"]], publisher_dir, 240)
+    except PublisherError as e:
+        raise gr.Error(str(e))
+    kind, draft_id = parse_draft_output(proc.stdout)
+    if kind == "new":
+        state["draft_id"] = draft_id
+        gr.Info("草稿已保存，记录 ID：" + draft_id)
+        return ("草稿已保存，记录 ID：`%s`\n\n"
+                "下一步：到公众号后台草稿箱核对排版，然后运行 `approve %s` 审批、`publish %s` 发表。"
+                % (draft_id, draft_id, draft_id)), state
+    if kind == "duplicate":
+        state["draft_id"] = draft_id
+        gr.Info("内容未变化，复用已有记录 " + draft_id)
+        return "内容未变化，复用已有记录：`%s`（状态见「刷新发表状态」）。" % draft_id, state
+    raise gr.Error("送审失败：" + ((proc.stderr.strip() or proc.stdout.strip())[-300:]))
+
+
+def refresh_status(publisher_dir):
+    try:
+        proc = run_publisher(["list"], publisher_dir, 30)
+    except PublisherError as e:
+        raise gr.Error(str(e))
+    text = (proc.stdout.strip() or proc.stderr.strip()) or "暂无记录。"
+    if proc.returncode != 0:
+        raise gr.Error("查询失败：" + text[-300:])
+    return "```\n" + text + "\n```"
 
 
 # ---- 界面事件 ----
@@ -243,9 +331,10 @@ def do_export(author, output_dir, state):
     return path, state
 
 
-def save_settings(api_key, model, author, output_dir):
+def save_settings(api_key, model, author, output_dir, publisher_dir):
     save_config({"api_key": api_key.strip(), "model": model.strip(),
-                 "author": author.strip(), "output_dir": output_dir.strip()})
+                 "author": author.strip(), "output_dir": output_dir.strip(),
+                 "publisher_dir": publisher_dir.strip()})
     gr.Info("设置已保存到 config.json")
 
 
@@ -266,6 +355,8 @@ with gr.Blocks(title="公众号推文创作台") as demo:
                                 info="写入文章 front matter 的 author 字段")
         outdir_box = gr.Textbox(label="导出目录", value=cfg["output_dir"],
                                 info="本地目录或 wechat-publisher 项目的 articles 路径")
+        pubdir_box = gr.Textbox(label="wechat-publisher 项目路径", value=cfg["publisher_dir"],
+                                info="用于排版预览与一键送审，例如 D:\\coding\\wechat-publisher")
         save_btn = gr.Button("保存设置")
 
     with gr.Group():
@@ -300,6 +391,17 @@ with gr.Blocks(title="公众号推文创作台") as demo:
         export_btn = gr.Button("导出 Markdown", variant="primary")
         export_path = gr.Textbox(label="导出位置", interactive=False)
 
+    with gr.Group():
+        gr.Markdown("## 6 · 预览与送审")
+        gr.Markdown("联动 [wechat-publisher](https://github.com/guohuan78/wechat-publisher)：预览公众号排版效果，"
+                    "送审后由那边的人工审批闸门把关（pending → 人工核对 → approve → publish 扫码发表）。")
+        preview_btn = gr.Button("排版预览")
+        preview_html = gr.HTML()
+        draft_btn = gr.Button("送审：存草稿待审批", variant="primary")
+        draft_md = gr.Markdown()
+        status_btn = gr.Button("刷新发表状态")
+        status_md = gr.Markdown()
+
     topics_btn.click(gen_topics, [topic_box, audience_box, key_box, model_box, app_state],
                      [topics_md, topics_radio, app_state])
     topics_radio.change(select_angle, [topics_radio, app_state], [app_state])
@@ -310,7 +412,10 @@ with gr.Blocks(title="公众号推文创作台") as demo:
     body_btn.click(gen_body, [outline_box, key_box, model_box, app_state], [body_md, app_state])
     summary_btn.click(gen_summary, [key_box, model_box, app_state], [summary_box, app_state])
     export_btn.click(do_export, [author_box, outdir_box, app_state], [export_path, app_state])
-    save_btn.click(save_settings, [key_box, model_box, author_box, outdir_box], None)
+    save_btn.click(save_settings, [key_box, model_box, author_box, outdir_box, pubdir_box], None)
+    preview_btn.click(render_preview, [pubdir_box, app_state], [preview_html])
+    draft_btn.click(send_draft, [pubdir_box, app_state], [draft_md, app_state])
+    status_btn.click(refresh_status, [pubdir_box], [status_md])
 
 if __name__ == "__main__":
     demo.launch(inbrowser=True)

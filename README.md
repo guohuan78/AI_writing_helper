@@ -46,13 +46,27 @@ Prompt 模板外置在 `prompts/` 目录（选题/标题/大纲/正文/摘要各
 
 ## 对接 wechat-publisher
 
-「导出目录」填 wechat-publisher 项目的 `articles` 路径（如 `D:\coding\wechat-publisher\articles`），导出后在那边执行：
+「设置」里填 wechat-publisher 项目路径（本机存在 `D:\coding\wechat-publisher` 时自动识别），第 6 步即可在创作台内完成串联：
+
+1. **排版预览**：调用 wechat-publisher 的 `render`，页面内直接查看公众号排版效果。
+2. **送审**：调用 `draft`，把导出的 Markdown 存为公众号草稿，页面回显记录 ID；内容未变化时自动复用已有记录。
+3. **刷新发表状态**：调用 `list`，回显审批状态机中的全部记录（pending → approved → published）。
+
+审批与发表按 wechat-publisher 的人工闸门在命令行执行：
 
 ```
-node src/cli.js draft articles/20260828-你的标题.md   # 填充编辑器并存草稿
-node src/cli.js approve <id>                          # 公众号后台核对排版后审批
-node src/cli.js publish <id>                          # 发表，管理员扫码确认
+node src/cli.js approve <id>   # 公众号后台草稿箱核对排版后审批
+node src/cli.js publish <id>   # 发表，管理员扫码确认
 ```
+
+## 测试
+
+```
+pip install pytest
+python -m pytest tests/
+```
+
+测试覆盖导出契约、排版预览、送审输出解析与配置错误路径；其中 `test_draft_and_status_real` 会真实调用 wechat-publisher 存一条标题带【测试】标记的草稿并停留在待审批状态，等待人工在后台核对处理。
 
 ## 桌面版（初版）
 

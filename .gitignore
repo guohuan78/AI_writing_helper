@@ -4,3 +4,5 @@ config.json
 history.json
 history.txt
 articles/
+preview.html
+.pytest_cache/
