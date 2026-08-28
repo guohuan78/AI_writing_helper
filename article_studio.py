@@ -65,7 +65,7 @@ def stream_text(prompt_name, api_key, model, temperature, max_tokens=2048,
                                  temperature=temperature):
             text += chunk
             yield text
-    except OrcaRouterError as e:
+    except LLMError as e:
         if e.code in ("bad_key", "no_key"):
             yield text + "\n\n> ⚠️ 请先在「设置」中填写有效的 API Key"
         elif e.code == "rate_limit":
@@ -77,6 +77,12 @@ def stream_text(prompt_name, api_key, model, temperature, max_tokens=2048,
 def strip_warnings(text):
     return "\n".join(l for l in text.splitlines()
                      if not l.strip().startswith("> ⚠️")).rstrip()
+
+
+def warning_message(text):
+    """从流式输出中提取警告内容，无警告返回 None。"""
+    m = re.search(r"> ⚠️ (.+)", text or "")
+    return m.group(1).strip() if m else None
 
 
 def parse_topics(text):
@@ -330,6 +336,9 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, provider, base_url,
                                avoid="\n".join("- " + a for a in used) or "（无）",
                                provider=provider, base_url=base_url):
         text = partial
+    warn = warning_message(text)
+    if warn:
+        raise gr.Error(warn)
     angles = parse_topics(text)
     if not angles:
         raise gr.Error("选题生成失败：" + (strip_warnings(text)[-300:] or "模型无返回"))
@@ -342,6 +351,9 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, provider, base_url,
     for partial in stream_text("titles", api_key, model, 0.95, 600, topic=topic,
                                angle=state["angle"], provider=provider, base_url=base_url):
         text = partial
+    warn = warning_message(text)
+    if warn:
+        raise gr.Error(warn)
     pairs = parse_titles(text)
     if not pairs:
         raise gr.Error("标题生成失败：" + (strip_warnings(text)[-300:] or "模型无返回"))
@@ -358,6 +370,9 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, provider, base_url,
                                angle=state["angle"], audience=audience,
                                provider=provider, base_url=base_url):
         outline = partial
+    warn = warning_message(outline)
+    if warn:
+        raise gr.Error(warn)
     state["outline"] = outline
     sections = parse_sections(outline)
     hits = corpus.search_articles(topic + "\n" + outline, k=2)
@@ -394,6 +409,9 @@ def auto_pipeline(auto_topic, auto_audience, api_key, model, provider, base_url,
     for partial in stream_text("summary", api_key, model, 0.4, 200, title=state["title"],
                                body=state["body"], provider=provider, base_url=base_url):
         summary = partial
+    warn = warning_message(summary)
+    if warn:
+        raise gr.Error(warn)
     state["summary"] = summary
     system, user_template = load_prompt("cover")
     try:
