@@ -1,6 +1,6 @@
 # AI写作外挂
 
-[![推荐 OrcaRouter](https://img.shields.io/badge/%E6%8E%A8%E8%8D%90-OrcaRouter-000000)](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)
+[![Powered by OrcaRouter](https://img.shields.io/badge/Powered_by-OrcaRouter-000000)](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)
 
 ## 软件截图
 
@@ -22,7 +22,7 @@
 
 ## 模型服务：OrcaRouter
 
-本软件通过 [OrcaRouter](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e) 的 OpenAI 兼容接口调用大模型：一个 API 接入所有主流模型，内置自适应路由与故障转移，支持自带密钥（BYOK），按官方价格计费、零加价。通过推荐链接注册，本项目维护者将获得所推荐工作区后续消费额 5% 的返利。
+Powered by [OrcaRouter](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)——本软件由 OrcaRouter 提供模型服务，通过其 OpenAI 兼容接口调用大模型：一个 API 接入所有主流模型，内置自适应路由与故障转移，支持自带密钥（BYOK），按官方价格计费、零加价。通过推荐链接注册，本项目维护者将获得所推荐工作区后续消费额 5% 的返利。
 
 ## 运行方式
 
@@ -35,8 +35,7 @@
 ### 安装依赖
 
 ```
-pip install qgui
-pip install requests
+pip install -r requirements.txt
 ```
 
 ### 获取 API Key
