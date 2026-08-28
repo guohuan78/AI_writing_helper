@@ -9,10 +9,17 @@
 - 智谱 GLM: https://docs.bigmodel.cn/cn/guide/develop/openai/introduction
 - Kimi: https://platform.kimi.ai/docs/guide/migrating-from-openai-to-kimi
 """
+import httpx
+import json
 from openai import (APIConnectionError, APIStatusError, AuthenticationError,
                     OpenAI, RateLimitError)
 
 REQUEST_TIMEOUT = 120
+_ANTHROPIC_VERSION = "2023-06-01"
+# 进程内协议记忆：(base_url, model) -> "anthropic"。
+# 某些模型（如 StepFun 的 step-explore）仅提供 Anthropic Messages 协议，
+# 第一次遇到 400 提示后记住，后续调用直接走 /v1/messages。
+_protocol_cache = {}
 
 
 class LLMError(Exception):
@@ -83,6 +90,92 @@ def resolve_model(provider, model=""):
     return info["default_model"]
 
 
+# ---- Anthropic Messages 协议（/v1/messages）----
+
+def _messages_endpoint(base_url):
+    return base_url.rstrip("/") + "/messages"
+
+
+def _anthropic_headers(api_key):
+    return {"x-api-key": api_key, "anthropic-version": _ANTHROPIC_VERSION,
+            "content-type": "application/json"}
+
+
+def _to_anthropic_payload(messages, model, max_tokens, temperature, stream=False):
+    system_parts = [m["content"] for m in messages if m["role"] == "system"]
+    payload = {"model": model, "max_tokens": max_tokens, "temperature": temperature,
+               "messages": [{"role": m["role"], "content": m["content"]}
+                            for m in messages if m["role"] != "system"]}
+    if system_parts:
+        payload["system"] = "\n\n".join(system_parts)
+    if stream:
+        payload["stream"] = True
+    return payload
+
+
+def _anthropic_error(status_code, text):
+    if status_code in (401, 403):
+        return LLMError("API Key 无效", code="bad_key")
+    if status_code == 429:
+        return LLMError("请求过于频繁或额度不足", code="rate_limit")
+    return LLMError("调用失败 HTTP %d：%s" % (status_code, (text or "")[:200]), code="http")
+
+
+def messages_chat(base_url, api_key, model, messages, max_tokens=512, temperature=0.7):
+    """Anthropic Messages 协议非流式调用，返回完整文本。"""
+    payload = _to_anthropic_payload(messages, model, max_tokens, temperature)
+    try:
+        resp = httpx.post(_messages_endpoint(base_url), json=payload,
+                          headers=_anthropic_headers(api_key), timeout=REQUEST_TIMEOUT)
+    except httpx.HTTPError as e:
+        raise LLMError("网络异常：" + str(e), code="network") from e
+    if resp.status_code != 200:
+        raise _anthropic_error(resp.status_code, resp.text)
+    try:
+        data = resp.json()
+        return "".join(block.get("text", "") for block in data.get("content", [])
+                       if block.get("type") == "text")
+    except (ValueError, AttributeError, TypeError):
+        raise LLMError("返回格式异常：" + resp.text[:200], code="format")
+
+
+def messages_chat_stream(base_url, api_key, model, messages,
+                         max_tokens=512, temperature=0.7):
+    """Anthropic Messages 协议流式调用，逐段 yield 文本。"""
+    payload = _to_anthropic_payload(messages, model, max_tokens, temperature, stream=True)
+    try:
+        with httpx.stream("POST", _messages_endpoint(base_url), json=payload,
+                          headers=_anthropic_headers(api_key), timeout=REQUEST_TIMEOUT) as resp:
+            if resp.status_code != 200:
+                body = resp.read().decode("utf-8", "replace")
+                raise _anthropic_error(resp.status_code, body)
+            for line in resp.iter_lines():
+                line = line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    event = json.loads(data_str)
+                except ValueError:
+                    continue
+                if event.get("type") == "content_block_delta":
+                    delta = event.get("delta", {})
+                    if delta.get("type") == "text_delta" and delta.get("text"):
+                        yield delta["text"]
+                elif event.get("type") == "message_stop":
+                    break
+    except httpx.HTTPError as e:
+        raise LLMError("网络异常：" + str(e), code="network") from e
+
+
+def _messages_api_required(e):
+    """识别「该模型仅支持 Messages API」类 400 错误。"""
+    return isinstance(e, APIStatusError) and getattr(e, "status_code", None) == 400 \
+        and "/v1/messages" in str(e)
+
+
 _ERROR_TYPES = (AuthenticationError, RateLimitError, APIConnectionError, APIStatusError)
 
 
@@ -113,15 +206,21 @@ def _messages(prompt):
 
 def chat(prompt, api_key, model="", provider="orcarouter", base_url="",
          max_tokens=512, temperature=0.7):
-    """非流式调用，返回完整回复文本。"""
+    """非流式调用，返回完整回复文本。仅支持 Messages 协议的模型自动切换。"""
     url = resolve_base_url(provider, base_url)
     real_model = resolve_model(provider, model)
+    messages = _messages(prompt)
+    if _protocol_cache.get((url, real_model)) == "anthropic":
+        return messages_chat(url, api_key, real_model, messages, max_tokens, temperature)
     client = _client(api_key, url)
     try:
         resp = client.chat.completions.create(
-            model=real_model, messages=_messages(prompt),
+            model=real_model, messages=messages,
             max_tokens=max_tokens, temperature=temperature)
     except _ERROR_TYPES as e:
+        if _messages_api_required(e):
+            _protocol_cache[(url, real_model)] = "anthropic"
+            return messages_chat(url, api_key, real_model, messages, max_tokens, temperature)
         raise _wrap(e) from e
     try:
         return resp.choices[0].message.content
@@ -131,15 +230,25 @@ def chat(prompt, api_key, model="", provider="orcarouter", base_url="",
 
 def chat_stream(prompt, api_key, model="", provider="orcarouter", base_url="",
                 max_tokens=2048, temperature=0.7):
-    """流式调用，逐段 yield 回复文本。"""
+    """流式调用，逐段 yield 回复文本。仅支持 Messages 协议的模型自动切换。"""
     url = resolve_base_url(provider, base_url)
     real_model = resolve_model(provider, model)
+    messages = _messages(prompt)
+    if _protocol_cache.get((url, real_model)) == "anthropic":
+        yield from messages_chat_stream(url, api_key, real_model, messages,
+                                        max_tokens, temperature)
+        return
     client = _client(api_key, url)
     try:
         stream = client.chat.completions.create(
-            model=real_model, messages=_messages(prompt),
+            model=real_model, messages=messages,
             max_tokens=max_tokens, temperature=temperature, stream=True)
     except _ERROR_TYPES as e:
+        if _messages_api_required(e):
+            _protocol_cache[(url, real_model)] = "anthropic"
+            yield from messages_chat_stream(url, api_key, real_model, messages,
+                                            max_tokens, temperature)
+            return
         raise _wrap(e) from e
     try:
         for chunk in stream:

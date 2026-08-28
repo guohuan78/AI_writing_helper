@@ -38,7 +38,7 @@
 | Kimi 月之暗面 | `https://api.moonshot.cn/v1` | `kimi-k2-0905-preview` | [platform.kimi.ai](https://platform.kimi.ai) |
 | 自定义 | 任意 OpenAI 兼容地址 | 自填 | — |
 
-模型名以各平台模型列表为准，输入框可直接改名；默认模型也可在 `providers.py` 的 `PROVIDERS` 注册表中调整。
+模型名以各平台模型列表为准，输入框可直接改名；默认模型也可在 `providers.py` 的 `PROVIDERS` 注册表中调整。调用引擎支持双协议：默认走 OpenAI ChatCompletions，遇到仅提供 Anthropic Messages 协议的模型（如 StepFun `step-explore` 等推理模型，需将其 API 地址设为 `https://api.stepfun.com/step_plan/v1`）会按返回的 400 提示自动切换到 `/v1/messages` 并记住，无需手动配置。
 
 Powered by [OrcaRouter](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)——推荐用 OrcaRouter：一个 Key 即可调用 GLM、Kimi、Qwen、DeepSeek 等全部模型，内置自适应路由与故障转移，按官方价格计费、零加价。通过推荐链接注册，本项目维护者将获得所推荐工作区后续消费额 5% 的返利。
 
