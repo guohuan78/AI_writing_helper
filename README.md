@@ -1,6 +1,6 @@
 # AI写作外挂
 
-[![Powered by OrcaRouter](https://img.shields.io/badge/Powered_by-OrcaRouter-000000)](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)
+[![Powered by OrcaRouter](https://img.shields.io/badge/Powered_by-OrcaRouter-2563eb)](https://www.orcarouter.ai/ref/ref_b183ab1e01f1ab2c8e0e)
 
 ## 软件截图
 
