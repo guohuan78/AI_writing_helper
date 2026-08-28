@@ -13,7 +13,8 @@ import subprocess
 
 import gradio as gr
 
-from orcarouter_provider import DEFAULT_MODEL, chat_stream
+import corpus
+from orcarouter_provider import DEFAULT_MODEL, chat, chat_stream
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROMPT_DIR = os.path.join(BASE_DIR, "prompts")
@@ -166,7 +167,7 @@ def parse_draft_output(stdout):
 def render_preview(publisher_dir, state):
     state = dict(state)
     if not state.get("export_path"):
-        raise gr.Error("请先在第 5 步导出 Markdown")
+        raise gr.Error("请先在第 6 步导出 Markdown")
     try:
         proc = run_publisher(["render", state["export_path"], "-o", PREVIEW_HTML], publisher_dir, 60)
     except PublisherError as e:
@@ -182,7 +183,7 @@ def render_preview(publisher_dir, state):
 def send_draft(publisher_dir, state):
     state = dict(state)
     if not state.get("export_path"):
-        raise gr.Error("请先在第 5 步导出 Markdown")
+        raise gr.Error("请先在第 6 步导出 Markdown")
     try:
         proc = run_publisher(["draft", state["export_path"]], publisher_dir, 240)
     except PublisherError as e:
@@ -212,6 +213,72 @@ def refresh_status(publisher_dir):
     return "```\n" + text + "\n```"
 
 
+# ---- 语料库、润色与封面 ----
+
+def corpus_stats_text():
+    s = corpus.stats()
+    return "文章 %d 篇 · 选题记录 %d 条" % (s["articles"], s["topics"])
+
+
+def add_corpus_article(title, text):
+    if not title.strip() or not text.strip():
+        raise gr.Error("标题和正文都需要填写")
+    corpus.add_article(title, text)
+    gr.Info("已导入语料库")
+    return corpus_stats_text(), "", ""
+
+
+def fill_rewrite(state):
+    if not state.get("body"):
+        raise gr.Error("正文尚未生成")
+    return state["body"]
+
+
+def gen_rewrites(rewrite_text, strength, api_key, model):
+    if not rewrite_text.strip():
+        raise gr.Error("请先在第 4 步生成正文，或直接把要改写的文字填入输入框")
+    if not api_key.strip():
+        raise gr.Error("请先在「设置」中填写 API Key")
+    system, user_template = load_prompt("rewrite")
+    messages = [{"role": "system", "content": system},
+                {"role": "user", "content": user_template.format(
+                    text=rewrite_text.strip(), strength=int(strength))}]
+    versions = []
+    try:
+        for _ in range(3):
+            out = chat(messages, api_key, model=model, max_tokens=1500, temperature=0.85)
+            versions.append(out.strip())
+    except OrcaRouterError as e:
+        raise gr.Error("调用失败：" + str(e))
+    return versions[0], versions[1], versions[2]
+
+
+def adopt_version(v1, v2, v3, choice, state):
+    state = dict(state)
+    picked = {"版本一": v1, "版本二": v2, "版本三": v3}.get(choice)
+    if picked is None or not picked.strip():
+        raise gr.Error("请先生成改写版本并选择其一")
+    state["body"] = picked.strip()
+    gr.Info("正文已替换为" + choice)
+    return state["body"], state
+
+
+def gen_cover(api_key, model, state):
+    if not state.get("body"):
+        raise gr.Error("请先生成正文")
+    if not api_key.strip():
+        raise gr.Error("请先在「设置」中填写 API Key")
+    system, user_template = load_prompt("cover")
+    messages = [{"role": "system", "content": system},
+                {"role": "user", "content": user_template.format(
+                    title=state["title"], digest=state["body"][:300])}]
+    try:
+        out = chat(messages, api_key, model=model, max_tokens=400, temperature=0.9)
+    except OrcaRouterError as e:
+        raise gr.Error("调用失败：" + str(e))
+    return out.strip()
+
+
 # ---- 界面事件 ----
 
 def gen_topics(topic, audience, api_key, model, state):
@@ -222,10 +289,14 @@ def gen_topics(topic, audience, api_key, model, state):
     state = dict(state)
     state.update({"topic": topic.strip(), "audience": audience.strip(),
                   "angle": None, "title": None, "body": None, "summary": None})
+    used = corpus.past_angles(state["topic"])
+    if used:
+        gr.Info("该主题已有 %d 条历史角度，已要求避开" % len(used))
     text = ""
     for partial in stream_text("topics", api_key, model, 0.9, 800,
                                topic=state["topic"],
-                               audience=state["audience"] or "公众号读者"):
+                               audience=state["audience"] or "公众号读者",
+                               avoid="\n".join("- " + a for a in used) or "（无）"):
         text = partial
         yield partial, gr.update(choices=[], value=None), state
     state["topics_raw"] = text
@@ -285,6 +356,12 @@ def gen_body(outline_text, api_key, model, state):
     if not outline:
         raise gr.Error("大纲为空，请先生成大纲")
     state["outline"] = outline
+    hits = corpus.search_articles((state.get("topic") or "") + "\n" + outline, k=2)
+    if hits:
+        style_block = "文风参考（只模仿语气与节奏，不引用其中内容）：\n" + "\n---\n".join(
+            "《%s》：%s" % (h["title"], h["body"][:400].replace("\n", " ")) for h in hits)
+    else:
+        style_block = "（语料库暂无参考文章，按自然的风格写。）"
     sections = parse_sections(outline)
     progress = gr.Progress()
     body = ""
@@ -295,7 +372,8 @@ def gen_body(outline_text, api_key, model, state):
         for partial in stream_text("body", api_key, model, 0.7, 2000,
                                    title=state["title"], angle=state["angle"],
                                    audience=state.get("audience") or "公众号读者",
-                                   outline=outline, section=section):
+                                   outline=outline, section=section,
+                                   style_block=style_block):
             section_text = partial
             yield joiner + partial, state
         body += joiner + section_text
@@ -323,6 +401,8 @@ def do_export(author, output_dir, state):
     if not state.get("title") or not state.get("body"):
         raise gr.Error("请先完成正文生成")
     path = export_article(state["title"], author, state["body"], output_dir)
+    corpus.add_article(state["title"], state["body"])
+    corpus.record_topic(state.get("topic", ""), state.get("angle", ""), state["title"])
     cfg = load_config()
     cfg["author"] = author.strip()
     cfg["output_dir"] = output_dir.strip()
@@ -359,6 +439,17 @@ with gr.Blocks(title="公众号推文创作台") as demo:
                                 info="用于排版预览与一键送审，例如 D:\\coding\\wechat-publisher")
         save_btn = gr.Button("保存设置")
 
+    with gr.Accordion("语料库（文风学习）", open=False):
+        gr.Markdown("导入已发表的文章作为文风参考，成稿时自动检索最相关的两篇；导出 Markdown 的文章会自动入库，"
+                    "选题历史也会记录用于避开旧角度。")
+        with gr.Row():
+            corpus_title = gr.Textbox(label="文章标题", scale=1)
+            corpus_stats = gr.Textbox(label="语料库现状", value=corpus_stats_text(), interactive=False, scale=1)
+        corpus_text = gr.Textbox(label="文章正文", lines=6)
+        with gr.Row():
+            corpus_add_btn = gr.Button("导入文章")
+            corpus_stats_btn = gr.Button("刷新统计")
+
     with gr.Group():
         gr.Markdown("## 1 · 选题")
         topic_box = gr.Textbox(label="主题", placeholder="今天想写什么：一个词、一件事、一条新闻都行")
@@ -385,14 +476,31 @@ with gr.Blocks(title="公众号推文创作台") as demo:
         body_md = gr.Markdown()
 
     with gr.Group():
-        gr.Markdown("## 5 · 摘要与导出")
+        gr.Markdown("## 5 · 润色重写")
+        gr.Markdown("把要改写的文字填入下方（「填入正文」可带入成稿全文），生成 3 个版本后选一版替换正文。")
+        rewrite_fill_btn = gr.Button("填入正文")
+        rewrite_input = gr.Textbox(label="待改写文字", lines=6)
+        strength_slider = gr.Slider(1, 5, step=1, value=3, label="改写强度",
+                                    info="1=只修语病用词，3=换句式结构，5=深度重写")
+        rewrite_btn = gr.Button("生成 3 个改写版本", variant="primary")
+        with gr.Row():
+            rewrite_v1 = gr.Textbox(label="版本一", lines=5)
+            rewrite_v2 = gr.Textbox(label="版本二", lines=5)
+            rewrite_v3 = gr.Textbox(label="版本三", lines=5)
+        rewrite_choice = gr.Radio(label="采用哪个版本", choices=["版本一", "版本二", "版本三"])
+        rewrite_adopt_btn = gr.Button("替换正文")
+
+    with gr.Group():
+        gr.Markdown("## 6 · 摘要与导出")
         summary_btn = gr.Button("生成摘要")
         summary_box = gr.Textbox(label="摘要（公众号摘要栏上限 120 字，发表时粘贴使用）", lines=3)
+        cover_btn = gr.Button("生成封面创意")
+        cover_box = gr.Textbox(label="封面创意（3 条）", lines=3)
         export_btn = gr.Button("导出 Markdown", variant="primary")
         export_path = gr.Textbox(label="导出位置", interactive=False)
 
     with gr.Group():
-        gr.Markdown("## 6 · 预览与送审")
+        gr.Markdown("## 7 · 预览与送审")
         gr.Markdown("联动 [wechat-publisher](https://github.com/guohuan78/wechat-publisher)：预览公众号排版效果，"
                     "送审后由那边的人工审批闸门把关（pending → 人工核对 → approve → publish 扫码发表）。")
         preview_btn = gr.Button("排版预览")
@@ -416,6 +524,15 @@ with gr.Blocks(title="公众号推文创作台") as demo:
     preview_btn.click(render_preview, [pubdir_box, app_state], [preview_html])
     draft_btn.click(send_draft, [pubdir_box, app_state], [draft_md, app_state])
     status_btn.click(refresh_status, [pubdir_box], [status_md])
+    corpus_add_btn.click(add_corpus_article, [corpus_title, corpus_text],
+                         [corpus_stats, corpus_text, corpus_title])
+    corpus_stats_btn.click(lambda: corpus_stats_text(), None, [corpus_stats])
+    rewrite_fill_btn.click(fill_rewrite, [app_state], [rewrite_input])
+    rewrite_btn.click(gen_rewrites, [rewrite_input, strength_slider, key_box, model_box],
+                      [rewrite_v1, rewrite_v2, rewrite_v3])
+    rewrite_adopt_btn.click(adopt_version, [rewrite_v1, rewrite_v2, rewrite_v3, rewrite_choice, app_state],
+                            [body_md, app_state])
+    cover_btn.click(gen_cover, [key_box, model_box, app_state], [cover_box])
 
 if __name__ == "__main__":
     demo.launch(inbrowser=True)

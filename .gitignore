@@ -5,4 +5,5 @@ history.json
 history.txt
 articles/
 preview.html
+corpus.db
 .pytest_cache/
