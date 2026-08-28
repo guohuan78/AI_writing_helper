@@ -1,2 +1,2 @@
+gradio
 openai
-qgui==0.6.3
